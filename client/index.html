@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- viewport-fit=cover + safe-area padding keeps controls clear of the
+         iPhone home indicator when installed. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    />
+    <meta name="theme-color" content="#0b0d10" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Private voice interface for the Hermes agent" />
+
+    <!-- iOS standalone install -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Hermes" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icons/icon-192.png" />
+
+    <title>Hermes Voice</title>
+  </head>
+  <body>
+    <!-- Login ------------------------------------------------------------ -->
+    <div id="login-view" class="view view--center" hidden>
+      <form id="login-form" class="login">
+        <h1 class="login__title">Hermes</h1>
+        <p class="login__subtitle">Private voice interface</p>
+        <label class="login__label" for="password">Passphrase</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          autocomplete="current-password"
+          required
+        />
+        <button type="submit" class="button button--primary">Unlock</button>
+        <p id="login-error" class="login__error" role="alert"></p>
+      </form>
+    </div>
+
+    <!-- App -------------------------------------------------------------- -->
+    <div id="app-view" class="view" hidden>
+      <header class="header">
+        <div class="status">
+          <span id="status-dot" class="status__dot" data-state="idle"></span>
+          <span id="status-text" class="status__text">Ready</span>
+        </div>
+        <button id="mode-button" class="button button--ghost" type="button">
+          Hold to talk
+        </button>
+      </header>
+
+      <div id="banner" class="banner" role="status" hidden></div>
+
+      <main id="transcript" class="transcript" aria-live="polite" aria-label="Conversation">
+      </main>
+
+      <footer class="controls">
+        <button
+          id="talk-button"
+          class="talk"
+          type="button"
+          aria-pressed="false"
+          data-state="idle"
+        >
+          <span class="talk__ring" aria-hidden="true"></span>
+          <span id="talk-label" class="talk__label">Hold to talk</span>
+        </button>
+
+        <div class="controls__row">
+          <button id="mute-button" class="button button--ghost" type="button" aria-pressed="false">
+            Mute
+          </button>
+          <button id="end-button" class="button button--ghost" type="button">End</button>
+        </div>
+      </footer>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
