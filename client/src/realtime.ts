@@ -49,7 +49,38 @@ export class RealtimeClient {
     return this.#socket?.readyState === WebSocket.OPEN;
   }
 
+  /**
+   * Detach and close the current socket, if any.
+   *
+   * Detaching the handlers before closing is the important part. A superseded
+   * socket still fires `close`, and its handler would otherwise re-enter the
+   * reconnect loop — stacking a second socket on top of the new one. A stale
+   * `open` is equally bad: `send()` writes to `#socket`, so a late handshake
+   * would push a duplicate `session.update` down the *current* connection.
+   */
+  #discardSocket(): void {
+    const socket = this.#socket;
+    if (!socket) return;
+
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null;
+    this.#socket = null;
+
+    try {
+      socket.close();
+    } catch {
+      /* already closing or closed */
+    }
+  }
+
   connect(credentials: RealtimeCredentials): void {
+    // Reconnecting while a socket is still CONNECTING is reachable: pressing
+    // talk during the 'connecting' state re-enters ensureSession(), whose
+    // `connected` guard is false for a socket that has not finished opening.
+    this.#discardSocket();
+
     this.#intentionalClose = false;
 
     const url = new URL(credentials.realtimeUrl);
@@ -205,7 +236,6 @@ export class RealtimeClient {
 
   close(): void {
     this.#intentionalClose = true;
-    this.#socket?.close();
-    this.#socket = null;
+    this.#discardSocket();
   }
 }
