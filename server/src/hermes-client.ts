@@ -3,6 +3,7 @@
  *
  * Contract confirmed against hermes-agent `gateway/platforms/api_server.py`:
  *   POST /api/sessions              -> { id?, title?, system_prompt?, model? }
+ *                                   => { object, session: { id, ... } }  (201)
  *   POST /api/sessions/{id}/chat    -> { message } => { message: { role, content } }
  *   GET  /health
  *
@@ -141,12 +142,14 @@ export class HermesClient {
 
   /** Create a Hermes session dedicated to one voice conversation. */
   async createSession(title: string): Promise<string> {
-    const body = await this.#request<{ id?: string; session_id?: string }>(
-      '/api/sessions',
-      { method: 'POST', body: JSON.stringify({ title }) },
-      15_000,
-    );
-    const sessionId = body.id ?? body.session_id;
+    const body = await this.#request<{
+      session?: { id?: string };
+      id?: string;
+      session_id?: string;
+    }>('/api/sessions', { method: 'POST', body: JSON.stringify({ title }) }, 15_000);
+    // api_server wraps the row: {object: "hermes.session", session: {id, ...}}.
+    // The flat forms are kept as a fallback for older gateways.
+    const sessionId = body.session?.id ?? body.id ?? body.session_id;
     if (!sessionId) {
       throw new HermesError('Hermes created a session without an id', 502);
     }
