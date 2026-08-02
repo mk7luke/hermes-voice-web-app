@@ -26,7 +26,10 @@ function hermesClient(fetchImpl: typeof fetch, timeoutMs = 5_000): HermesClient 
 
 describe('HermesClient', () => {
   it('creates a session and returns its id', async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ id: 'api_123' }));
+    // api_server responds with the row wrapped in `session`, status 201.
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ object: 'hermes.session', session: { id: 'api_123' } }, 201),
+    );
     const client = hermesClient(fetchImpl as unknown as typeof fetch);
 
     await expect(client.createSession('Voice test')).resolves.toBe('api_123');
@@ -34,6 +37,13 @@ describe('HermesClient', () => {
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('http://127.0.0.1:8642/api/sessions');
     expect(init.method).toBe('POST');
+  });
+
+  it('accepts a flat session id from older gateways', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ id: 'api_flat' }));
+    const client = hermesClient(fetchImpl as unknown as typeof fetch);
+
+    await expect(client.createSession('Voice test')).resolves.toBe('api_flat');
   });
 
   it('sends the bearer key Hermes expects', async () => {
