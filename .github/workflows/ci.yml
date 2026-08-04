@@ -5,10 +5,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # A quiet repo still needs to hear about new advisories. Without this, a CVE
+  # in a transitive dependency stays invisible until someone happens to open a
+  # PR. Mondays 06:00 UTC.
+  schedule:
+    - cron: '0 6 * * 1'
 
-# A second push to the same PR makes the first run irrelevant.
+# A second push to the same PR makes the first run irrelevant. Keyed on the
+# workflow as well as the ref so a future second workflow cannot cancel this one.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

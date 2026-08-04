@@ -1,0 +1,31 @@
+version: 2
+
+updates:
+  # The audit job tells us a dependency went bad. This is what fixes it without
+  # anyone having to notice first.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    groups:
+      # Fastify's plugins move together; one PR per week beats four.
+      fastify:
+        patterns:
+          - fastify
+          - '@fastify/*'
+      dev-tooling:
+        dependency-type: development
+        patterns:
+          - '*'
+
+  # Pinned action majors still drift. Unwatched CI is how a supply-chain issue
+  # gets a foothold in a public repo.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [dependencies, ci]

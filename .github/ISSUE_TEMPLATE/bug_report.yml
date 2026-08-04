@@ -6,7 +6,8 @@ body:
     attributes:
       value: |
         **Do not report security vulnerabilities here.** See
-        [SECURITY.md](../blob/main/SECURITY.md) — disclosure goes to email first.
+        [SECURITY.md](https://github.com/mk7luke/hermes-voice-web-app/blob/main/SECURITY.md)
+        — disclosure goes to email first.
 
         Please scrub any output you paste. Logs are redacted, but `.env` values,
         tokens, and tailnet hostnames are not worth the risk.
