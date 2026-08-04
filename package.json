@@ -3,7 +3,26 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Private push-to-talk voice PWA for the Hermes agent, bridged to xAI Realtime Voice.",
+  "description": "Self-hosted push-to-talk voice PWA for the Hermes agent, bridged to xAI Realtime Voice.",
+  "license": "MIT",
+  "author": "Luke (https://github.com/mk7luke)",
+  "homepage": "https://github.com/mk7luke/hermes-voice-web-app#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mk7luke/hermes-voice-web-app.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mk7luke/hermes-voice-web-app/issues"
+  },
+  "keywords": [
+    "hermes",
+    "voice",
+    "pwa",
+    "xai",
+    "realtime",
+    "push-to-talk",
+    "self-hosted"
+  ],
   "engines": {
     "node": ">=20.11"
   },
