@@ -7,6 +7,12 @@ and do not describe the problem in a pull request.
 
 Please include what you need to demonstrate the issue — affected version or commit,
 reproduction steps, and what an attacker gets out of it. A proof of concept helps.
+Your deployment shape is often the deciding detail: reverse proxy or not,
+`COOKIE_SECURE`, `HOST` binding, whether it sits behind Tailscale.
+
+**Do not put real credentials in a report.** Redact keys, cookies, and tokens before
+you send anything. If a key of yours is already exposed, rotate it first and report
+second — `XAI_API_KEY` and `API_SERVER_KEY` are the urgent two.
 
 This is a personal project maintained by one person, so there is no paid bounty and
 no guaranteed response window. Expect a reply within about a week. If a report turns
@@ -49,9 +55,13 @@ server-side from the signed cookie and is never read from the request body. A cl
 cannot name another conversation. `tests/routes.test.ts` asserts this.
 
 **Rate limiting.** `POST /api/auth/login` is capped at 5 attempts per 15 minutes per
-IP. It is the only unauthenticated write endpoint.
+IP. It is the only unauthenticated write endpoint — every other route resolves a
+session through `requireSession` first. Authenticated routes are limited too: 120
+requests per minute globally, 60 on Hermes calls, 20 on session creation.
 
 **Logging.** Log output passes through a redaction layer, and audio is never logged.
+Fastify's built-in request logger is deliberately disabled, because it would emit
+headers — including `Cookie` — before redaction could touch them.
 
 ## Known and accepted limits
 
@@ -72,6 +82,25 @@ These are deliberate. Reporting them is fine, but they are unlikely to change.
   persuades the voice layer to misbehave is bounded by that — it cannot reach
   anything Hermes would not already do for its operator. Ways to escape that
   boundary are very much in scope.
+
+## In scope
+
+Aim here rather than at the covered ground above:
+
+- Authentication bypass or session forgery.
+- Session isolation failures — one browser reaching another's Hermes conversation.
+- Leaking `XAI_API_KEY`, `API_SERVER_KEY`, or `SESSION_SECRET` to the client or into
+  logs, including gaps in the redaction layer (`server/src/logger.ts`).
+- Ephemeral-token handling: over-long TTL, insufficient scoping, reuse across
+  sessions.
+- Request forgery or injection reaching the Hermes `api_server` gateway.
+- Anything that lets an unauthenticated caller reach Hermes through this server.
+- Escapes from the `ask_hermes` tool boundary described above.
+
+Vulnerabilities in Hermes itself or in xAI's Realtime Voice service belong to those
+projects — report them to the [Hermes project](https://github.com/NousResearch/hermes-agent)
+and to xAI respectively. If the bug is in how *this* app calls either of them, that
+is ours.
 
 ## Out of scope
 

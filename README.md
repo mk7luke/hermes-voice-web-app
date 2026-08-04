@@ -208,6 +208,7 @@ docs/PRD.md    Design document
 tests/config.test.ts    environment validation
 tests/auth.test.ts      passphrase, cookie signing, session store
 tests/clients.test.ts   Hermes + xAI contracts, log redaction
+tests/realtime.test.ts  realtime session lifecycle, reconnect, superseded sockets
 tests/routes.test.ts    end-to-end routes, including session isolation
 ```
 

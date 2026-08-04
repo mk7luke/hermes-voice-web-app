@@ -14,6 +14,8 @@ the PR.
 
 ## Getting set up
 
+You need **Node.js 20.11 or newer** (`engines.node` in `package.json`).
+
 ```bash
 git clone https://github.com/mk7luke/hermes-voice-web-app.git
 cd hermes-voice-web-app
@@ -25,6 +27,12 @@ $EDITOR .env
 `.env.example` is annotated; every required variable explains what it is for. The
 server validates configuration at boot and refuses to start with a clear message
 naming the variable it is missing, so you will not get a mysterious runtime failure.
+
+Generate `SESSION_SECRET` with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
 
 For local development over `http://localhost`, set `COOKIE_SECURE=false`. Browsers
 treat `localhost` as a secure context, so the microphone still works.
@@ -68,6 +76,23 @@ explain why — do not quietly adjust the assertion.
 
 Bug fixes should come with a test that fails before the fix and passes after.
 
+### What the suite cannot cover
+
+Vitest runs in Node with the Hermes and xAI clients stubbed, so it never touches a
+real microphone, a real browser, or a real network drop. If your change goes near any
+of these, check it on a device and say so in the PR:
+
+- **Microphone permission on iOS Safari.** Only offered over HTTPS — `localhost`
+  counts, a bare LAN IP does not.
+- **Add to Home Screen**, and that the app launches standalone without browser chrome.
+- **Backgrounding the app mid-session.** The microphone must be released.
+- **A brief network drop.** The session should reconnect and resume the same
+  conversation rather than starting a new one.
+- **Interrupting playback** by pressing talk while Hermes is speaking.
+
+"I could not test this on iOS" is a perfectly good thing to write in a PR. Quietly
+implying you did is not.
+
 ## Commits and pull requests
 
 - Branch off `main`.
@@ -97,3 +122,13 @@ decision to keep the trust model simple enough to reason about.
 
 Streaming Hermes responses into speech token-by-token is the most wanted improvement
 and is genuinely open.
+
+## Code of Conduct
+
+Participation in this project is governed by the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Licence
+
+By contributing, you agree that your contributions are licensed under the
+[MIT Licence](LICENSE) that covers this project.
