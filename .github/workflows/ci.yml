@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # A quiet repo still needs to hear about new advisories. Without this, a CVE
+  # in a transitive dependency stays invisible until someone happens to open a
+  # PR. Mondays 06:00 UTC.
+  schedule:
+    - cron: '0 6 * * 1'
+
+# A second push to the same PR makes the first run irrelevant. Keyed on the
+# workflow as well as the ref so a future second workflow cannot cancel this one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20.11 is the floor declared in package.json engines; 22 is current LTS.
+        node: ['20.11', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Advisory only for low-severity noise; fail the build on anything
+      # genuinely serious. This app fronts an agent holding real credentials.
+      - name: Audit
+        run: npm audit --audit-level=high

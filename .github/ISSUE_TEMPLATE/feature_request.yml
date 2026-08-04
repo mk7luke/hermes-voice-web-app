@@ -1,0 +1,53 @@
+name: Feature request
+description: Suggest an improvement
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This project is deliberately small and single-user. Telephony/SIP, native
+        apps, multi-user accounts, wake word, and offline history are **out of
+        scope** — not "not yet", but a decision to keep the trust model simple.
+
+        Proposals in those areas will most likely be declined. Everything else is
+        genuinely open.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the situation you hit, not the solution you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including doing nothing, or solving it outside this app.
+
+  - type: dropdown
+    id: scope-check
+    attributes:
+      label: Does this keep the app single-user?
+      options:
+        - "Yes"
+        - "No — it needs multiple users or accounts"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to open a PR for this
+          required: false
