@@ -1,7 +1,11 @@
 # Hermes Voice
 
-A private, installable voice interface (PWA) for the [Hermes agent](https://github.com/NousResearch/hermes-agent).
+A self-hosted, installable voice interface (PWA) for the [Hermes agent](https://github.com/NousResearch/hermes-agent).
 Open a URL on your phone, hold a button, talk to Hermes. The server stays headless.
+
+You run it yourself, on your own hardware, against your own agent. It is single-user
+by design — one passphrase, one conversation — which keeps the trust model small
+enough to read in an afternoon.
 
 Audio runs browser ↔ xAI Realtime Voice for low latency. Everything that needs
 trust — memory, tools, credentials — stays with Hermes behind this server.
@@ -180,7 +184,7 @@ while you are talking.
 ```bash
 npm run dev          # server on :8787, serving the built client
 npm run dev:client   # Vite dev server with HMR, proxying /api to :8787
-npm test             # 76 tests
+npm test             # 95 tests
 npm run typecheck    # server + client
 ```
 
@@ -204,6 +208,7 @@ docs/PRD.md    Design document
 tests/config.test.ts    environment validation
 tests/auth.test.ts      passphrase, cookie signing, session store
 tests/clients.test.ts   Hermes + xAI contracts, log redaction
+tests/realtime.test.ts  realtime session lifecycle, reconnect, superseded sockets
 tests/routes.test.ts    end-to-end routes, including session isolation
 ```
 
@@ -236,3 +241,19 @@ which Hermes session it talks to.
 Telephony/SIP, native apps, multi-user accounts, wake word, offline history.
 Streaming Hermes responses into speech token-by-token (Hermes exposes
 `/chat/stream`) is the natural next step.
+
+## Contributing
+
+Bug reports and focused fixes are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
+for setup and conventions. Open an issue before building anything large; the scope
+above is deliberate.
+
+Participation is covered by the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+**Found a security problem?** Do not open a public issue — see
+[SECURITY.md](SECURITY.md). This app fronts an agent holding real credentials, so
+disclosure goes to email first.
+
+## License
+
+[MIT](LICENSE) © 2026 Luke
