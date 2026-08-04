@@ -1,0 +1,86 @@
+name: Bug report
+description: Something behaves incorrectly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report security vulnerabilities here.** See
+        [SECURITY.md](../blob/main/SECURITY.md) — disclosure goes to email first.
+
+        Please scrub any output you paste. Logs are redacted, but `.env` values,
+        tokens, and tailnet hostnames are not worth the risk.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: And what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "git rev-parse --short HEAD"
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      placeholder: "node --version"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where does it go wrong?
+      options:
+        - Server (startup, config, API routes)
+        - Client / PWA (audio, UI, install)
+        - Hermes connection
+        - xAI Realtime connection
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and OS
+      description: Only if it is a client-side issue.
+      placeholder: "Safari on iOS 18.2"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Run with `LOG_LEVEL=debug` if you can. This is rendered as code, no backticks needed.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I am serving over HTTPS (or `localhost`) — the microphone will not work otherwise
+          required: false
+        - label: "`curl /health` reports Hermes as reachable"
+          required: false
+        - label: I checked the Troubleshooting table in the README
+          required: false
