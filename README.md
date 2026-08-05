@@ -3,6 +3,22 @@
 A self-hosted, installable voice interface (PWA) for the [Hermes agent](https://github.com/NousResearch/hermes-agent).
 Open a URL on your phone, hold a button, talk to Hermes. The server stays headless.
 
+## Affiliation & trademarks
+
+**Hermes Voice is an independent, unofficial project.** It is not
+affiliated with, endorsed by, or sponsored by [Nous Research](https://nousresearch.com)
+or [xAI](https://x.ai).
+
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent) is © Nous Research,
+  released under the [MIT License](https://github.com/NousResearch/hermes-agent/blob/main/LICENSE).
+  “Hermes” / “Hermes Agent” refer to that upstream project; this app is a
+  third-party voice UI that connects to a self-hosted Hermes instance.
+- xAI Realtime Voice / Grok are services of xAI. Use of those APIs is subject to
+  [xAI’s Enterprise Terms](https://x.ai/legal/terms-of-service-enterprise),
+  [Acceptable Use Policy](https://x.ai/legal/acceptable-use-policy), and
+  [Brand Guidelines](https://x.ai/legal/brand-guidelines). You must supply your
+  own `XAI_API_KEY`; never commit keys.
+
 You run it yourself, on your own hardware, against your own agent. It is single-user
 by design — one passphrase, one conversation — which keeps the trust model small
 enough to read in an afternoon.
