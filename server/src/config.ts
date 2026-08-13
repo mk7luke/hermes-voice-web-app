@@ -8,6 +8,21 @@
 
 export type VoiceProvider = 'xai' | 'elevenlabs';
 
+/**
+ * How the app decides a request is authorised.
+ *
+ * `passphrase` is the default and the only self-contained option: the app
+ * authenticates the browser itself with `APP_PASSWORD`.
+ *
+ * `proxy` removes that check entirely and treats every request that arrives as
+ * already authenticated, for deployments behind an identity-aware proxy
+ * (Cloudflare Access, Tailscale, oauth2-proxy). It is only safe when the origin
+ * cannot be reached except through that proxy — a Cloudflare tunnel, a tailnet
+ * address, a loopback bind. An open port with `proxy` mode is an unauthenticated
+ * route to someone's agent.
+ */
+export type AuthMode = 'passphrase' | 'proxy';
+
 export interface Config {
   readonly defaultVoiceProvider: VoiceProvider;
   readonly xaiEnabled: boolean;
@@ -29,7 +44,9 @@ export interface Config {
   readonly hermesSessionKey: string | null;
   readonly hermesTimeoutMs: number;
 
-  readonly appPassword: string;
+  readonly authMode: AuthMode;
+  /** Null in `proxy` mode, where nothing checks a passphrase. */
+  readonly appPassword: string | null;
   readonly sessionSecret: string;
   readonly sessionTtlMs: number;
 
@@ -109,6 +126,13 @@ function boolean(env: NodeJS.ProcessEnv, key: string, fallback: boolean): boolea
 
 const VOICE_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
+function parseAuthMode(env: NodeJS.ProcessEnv): AuthMode {
+  const raw = env.AUTH_MODE?.trim().toLowerCase();
+  if (!raw) return 'passphrase';
+  if (raw === 'passphrase' || raw === 'proxy') return raw;
+  throw new ConfigError(`AUTH_MODE must be passphrase or proxy, got "${raw}".`);
+}
+
 function parseVoiceProvider(env: NodeJS.ProcessEnv): VoiceProvider | null {
   const raw = env.VOICE_PROVIDER?.trim().toLowerCase();
   if (!raw) return null;
@@ -175,9 +199,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
 
-  const appPassword = required(env, 'APP_PASSWORD');
-  if (appPassword.length < 8) {
-    throw new ConfigError('APP_PASSWORD must be at least 8 characters.');
+  const authMode = parseAuthMode(env);
+
+  // In proxy mode nothing checks a passphrase, so requiring one would be
+  // theatre — an operator would set a value they can never use and might
+  // reasonably believe still protects something.
+  let appPassword: string | null = null;
+  if (authMode === 'passphrase') {
+    appPassword = required(env, 'APP_PASSWORD');
+    if (appPassword.length < 8) {
+      throw new ConfigError('APP_PASSWORD must be at least 8 characters.');
+    }
+  } else if (env.APP_PASSWORD?.trim()) {
+    throw new ConfigError(
+      'APP_PASSWORD is set but AUTH_MODE=proxy ignores it. Remove one of the two ' +
+        'so it is clear what is actually guarding this app.',
+    );
   }
 
   const sessionTtlHours = integer(env, 'SESSION_TTL_HOURS', 168, { min: 1, max: 8760 });
@@ -245,6 +282,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       max: 600_000,
     }),
 
+    authMode,
     appPassword,
     sessionSecret,
     sessionTtlMs: sessionTtlHours * 60 * 60 * 1000,

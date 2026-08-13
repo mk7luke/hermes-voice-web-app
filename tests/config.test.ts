@@ -72,3 +72,27 @@ describe('loadConfig', () => {
     expect(config.sessionTtlMs).toBe(2 * 60 * 60 * 1000);
   });
 });
+
+describe('AUTH_MODE', () => {
+  it('defaults to passphrase', () => {
+    expect(loadConfig(baseEnv()).authMode).toBe('passphrase');
+  });
+
+  it('drops the APP_PASSWORD requirement in proxy mode', () => {
+    const env = baseEnv({ AUTH_MODE: 'proxy' });
+    delete env.APP_PASSWORD;
+    const config = loadConfig(env);
+    expect(config.authMode).toBe('proxy');
+    expect(config.appPassword).toBeNull();
+  });
+
+  it('refuses a passphrase that proxy mode would silently ignore', () => {
+    // Setting both leaves an operator believing a passphrase still guards the
+    // app when nothing reads it.
+    expect(() => loadConfig(baseEnv({ AUTH_MODE: 'proxy' }))).toThrow(/ignores it/);
+  });
+
+  it('rejects an unknown mode', () => {
+    expect(() => loadConfig(baseEnv({ AUTH_MODE: 'oauth' }))).toThrow(ConfigError);
+  });
+});

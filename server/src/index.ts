@@ -85,7 +85,20 @@ async function main(): Promise<void> {
     hermesApiUrl: config.hermesApiUrl,
     voiceProvider: config.defaultVoiceProvider,
     voiceModel: config.xaiVoiceModel,
+    authMode: config.authMode,
   });
+
+  if (config.authMode === 'proxy') {
+    // Stated at every boot on purpose. This is the one setting that makes the
+    // app itself defenceless, and the assumption behind it lives outside the
+    // app — in a tunnel, a firewall rule, or an access policy that someone can
+    // change later without touching this repo.
+    logger.warn(
+      'AUTH_MODE=proxy — every request that reaches this server is treated as ' +
+        'authenticated. This is only safe while the origin cannot be reached ' +
+        'except through your identity-aware proxy.',
+    );
+  }
 
   if (!config.cookieSecure) {
     logger.warn(

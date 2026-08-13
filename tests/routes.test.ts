@@ -27,7 +27,7 @@ interface Harness {
   mintToken: ReturnType<typeof vi.fn>;
 }
 
-async function harness(): Promise<Harness> {
+async function harness(env: Record<string, string> = {}): Promise<Harness> {
   const config = loadConfig({
     XAI_API_KEY: 'xai-test',
     API_SERVER_KEY: 'hermes-test',
@@ -35,6 +35,7 @@ async function harness(): Promise<Harness> {
     SESSION_SECRET: 'y'.repeat(40),
     COOKIE_SECURE: 'false',
     LOG_LEVEL: 'error',
+    ...env,
   });
 
   const logger = createLogger('error', () => {});
@@ -406,5 +407,72 @@ describe('health', () => {
     expect(response.body).not.toContain('xai-test');
     expect(response.body).not.toContain('hermes-test');
     expect(response.body).not.toContain('8642');
+  });
+});
+
+describe('AUTH_MODE=proxy', () => {
+  const PROXY_ENV = { AUTH_MODE: 'proxy', APP_PASSWORD: '' };
+
+  it('serves an authenticated session without a cookie', async () => {
+    // The identity-aware proxy already decided, and the origin is not reachable
+    // around it, so there is nothing left for the app to authenticate.
+    const { app } = await harness(PROXY_ENV);
+    const response = await app.inject({ method: 'GET', url: '/api/auth/me' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().authenticated).toBe(true);
+    expect(response.cookies[0]?.name).toBe('hv_session');
+    await app.close();
+  });
+
+  it('still binds each browser to its own Hermes session', async () => {
+    // Dropping the passphrase must not drop the session model: the Hermes
+    // session id stays server-side, keyed by a cookie the client cannot forge.
+    const { app, hermesCreateSession } = await harness(PROXY_ENV);
+
+    const first = await app.inject({ method: 'GET', url: '/api/auth/me' });
+    const cookie = `${first.cookies[0]!.name}=${first.cookies[0]!.value}`;
+
+    const start = { turnMode: 'push_to_talk' as const };
+    await app.inject({ method: 'POST', url: '/api/session/start', headers: { cookie }, payload: start });
+    await app.inject({ method: 'POST', url: '/api/session/start', headers: { cookie }, payload: start });
+    // Same browser reuses one Hermes session...
+    expect(hermesCreateSession).toHaveBeenCalledTimes(1);
+
+    // ...a different browser gets its own.
+    await app.inject({ method: 'POST', url: '/api/session/start', payload: start });
+    expect(hermesCreateSession).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
+  it('still rejects a tampered cookie rather than replacing it', async () => {
+    const { app } = await harness(PROXY_ENV);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { cookie: 'hv_session=forged.signature' },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json().error).toBe('invalid_session');
+    await app.close();
+  });
+
+  it('accepts a login with no passphrase instead of erroring', async () => {
+    const { app } = await harness(PROXY_ENV);
+    const response = await app.inject({ method: 'POST', url: '/api/auth/login', payload: {} });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().ok).toBe(true);
+    await app.close();
+  });
+
+  it('leaves passphrase mode untouched', async () => {
+    const { app } = await harness();
+    const response = await app.inject({ method: 'GET', url: '/api/auth/me' });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json().error).toBe('not_authenticated');
+    await app.close();
   });
 });

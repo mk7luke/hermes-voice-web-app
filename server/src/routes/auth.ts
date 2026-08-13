@@ -7,19 +7,14 @@
 
 import type { FastifyInstance } from 'fastify';
 
-import { SESSION_COOKIE, signSessionId, verifyPassword } from '../auth.js';
+import { SESSION_COOKIE, verifyPassword } from '../auth.js';
 import type { AppContext } from '../context.js';
-import { requireSession } from '../context.js';
+import { COOKIE_OPTIONS, issueSession, requireSession } from '../context.js';
 
 export function registerAuthRoutes(app: FastifyInstance, context: AppContext): void {
   const { config, logger, sessions } = context;
 
-  const cookieOptions = {
-    httpOnly: true,
-    secure: config.cookieSecure,
-    sameSite: 'lax' as const,
-    path: '/',
-  };
+  const cookieOptions = { ...COOKIE_OPTIONS, secure: config.cookieSecure };
 
   app.post(
     '/api/auth/login',
@@ -30,7 +25,10 @@ export function registerAuthRoutes(app: FastifyInstance, context: AppContext): v
       schema: {
         body: {
           type: 'object',
-          required: ['password'],
+          // Nothing to require in proxy mode, and demanding a passphrase the
+          // deployment does not have would reject the request before the
+          // handler could issue a session.
+          required: config.authMode === 'passphrase' ? ['password'] : [],
           properties: {
             password: { type: 'string', minLength: 1, maxLength: 512 },
           },
@@ -38,6 +36,15 @@ export function registerAuthRoutes(app: FastifyInstance, context: AppContext): v
       },
     },
     async (request, reply) => {
+      // In proxy mode there is no passphrase to check and the PWA never shows
+      // the login form, but the endpoint stays reachable: a stale client, or a
+      // bookmark, should get a working session rather than an error about a
+      // passphrase this deployment does not have.
+      if (config.authMode === 'proxy' || !config.appPassword) {
+        const session = issueSession(context, reply);
+        return reply.send({ ok: true, expiresAt: session.expiresAt });
+      }
+
       const { password } = request.body as { password: string };
 
       const ok = await verifyPassword(password, config.appPassword, context.passwordSalt);
@@ -46,15 +53,10 @@ export function registerAuthRoutes(app: FastifyInstance, context: AppContext): v
         return reply.code(401).send({ error: 'invalid_password' });
       }
 
-      const session = sessions.create();
+      const session = issueSession(context, reply);
       logger.info('login succeeded', { ip: request.ip, sessionId: session.id.slice(0, 8) });
 
-      return reply
-        .setCookie(SESSION_COOKIE, signSessionId(session.id, config.sessionSecret), {
-          ...cookieOptions,
-          maxAge: Math.floor(config.sessionTtlMs / 1000),
-        })
-        .send({ ok: true, expiresAt: session.expiresAt });
+      return reply.send({ ok: true, expiresAt: session.expiresAt });
     },
   );
 

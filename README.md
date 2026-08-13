@@ -106,7 +106,8 @@ Required variables — see `.env.example` for the full annotated list:
 | `ELEVENLABS_VOICE_ID` | Required with the ElevenLabs key. Any custom / generated / cloned id. |
 | `VOICE_PROVIDER` | `xai` or `elevenlabs`. Default when both providers are configured. |
 | `API_SERVER_KEY` | Bearer key for the Hermes `api_server` platform. |
-| `APP_PASSWORD` | Passphrase for the web app. |
+| `AUTH_MODE` | `passphrase` (default) or `proxy`. See [Authentication](#authentication). |
+| `APP_PASSWORD` | Passphrase for the web app. Required unless `AUTH_MODE=proxy`. |
 | `SESSION_SECRET` | ≥32 chars, signs session cookies. |
 
 Everything else has a working default. The server refuses to start if a required
@@ -172,6 +173,39 @@ other, not both.
 
 Logs are JSON-file capped at 3 × 10 MB, so an unattended box will not fill its
 disk with transcript noise.
+
+## Authentication
+
+By default the app authenticates the browser itself: one passphrase
+(`APP_PASSWORD`), exchanged for a signed session cookie that expires after
+`SESSION_TTL_HOURS`.
+
+If you already run an identity-aware proxy in front of it — Cloudflare Access, a
+Tailscale ACL, oauth2-proxy — that passphrase is a second login for the same
+person. Set `AUTH_MODE=proxy` and leave `APP_PASSWORD` empty to drop it:
+
+```bash
+AUTH_MODE=proxy
+APP_PASSWORD=
+```
+
+**This only holds if the origin cannot be reached except through that proxy.**
+A `cloudflared` tunnel, a tailnet-only address, or a loopback bind satisfies
+that; an open port does not. In `proxy` mode the app performs no authentication
+of its own, so anything that reaches the port is inside — and the port is the
+front door to an agent holding your memory, files, and credentials. The server
+prints a warning naming this assumption at every boot.
+
+Setting both `AUTH_MODE=proxy` and a non-empty `APP_PASSWORD` is refused at
+startup rather than silently ignored, so nobody is left believing a passphrase
+still guards the app.
+
+Sessions work the same way in both modes. The cookie is not the authentication
+in `proxy` mode — it is what binds a browser to its own Hermes session, so one
+client can never name another's conversation. A caller without a valid cookie is
+issued a fresh session instead of a 401; a caller with a *tampered* cookie is
+still rejected, because a bad signature means something is wrong rather than
+missing.
 
 ## Secure remote access
 
@@ -317,6 +351,7 @@ which Hermes session it talks to.
 | `hermes: unreachable` | Hermes down, or `api_server` platform not enabled. |
 | 503 `xai_unavailable` | `XAI_API_KEY` invalid or lacks Realtime Voice access. |
 | Logged out repeatedly | Server restarted — sessions are in-memory by design. |
+| Login screen still appears with `AUTH_MODE=proxy` | The server did not start in proxy mode; check the boot log for the `AUTH_MODE=proxy` warning. |
 | Cannot install to home screen | Must be HTTPS with the manifest reachable. |
 | Container stuck `unhealthy` | `/health` is probed on `PORT` from `.env`; a `PORT` the app is not bound to never answers. |
 | Container healthy, `hermes: unreachable` | `network_mode: host` was changed, or `HERMES_API_URL` does not point at the host's loopback. |
