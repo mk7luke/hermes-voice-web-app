@@ -72,6 +72,8 @@ export class ElevenLabsClient {
   readonly #fetch: typeof fetch;
   readonly #configuredAgentId: string | null;
   #createdAgentId: string | null = null;
+  /** In-flight creation, so concurrent callers share one agent. */
+  #creatingAgent: Promise<string> | null = null;
 
   constructor(options: ElevenLabsClientOptions) {
     this.#apiKey = options.apiKey;
@@ -124,6 +126,17 @@ export class ElevenLabsClient {
     if (this.#configuredAgentId) return this.#configuredAgentId;
     if (this.#createdAgentId) return this.#createdAgentId;
 
+    // Single-flight. `#createdAgentId` is only set once the create request
+    // resolves, so two sessions starting at the same moment would otherwise
+    // both pass the check above and each leave a permanent agent behind on the
+    // account. Cleared on settle so a failed attempt stays retryable.
+    this.#creatingAgent ??= this.#createAgent(defaultVoiceId, instructions).finally(() => {
+      this.#creatingAgent = null;
+    });
+    return this.#creatingAgent;
+  }
+
+  async #createAgent(defaultVoiceId: string, instructions: string): Promise<string> {
     const body = await this.#requestJson<{ agent_id?: string }>(AGENTS_CREATE_URL, {
       method: 'POST',
       payload: {

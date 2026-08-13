@@ -140,6 +140,62 @@ describe('ElevenLabsClient', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('creates one agent when two sessions start at the same moment', async () => {
+    // #createdAgentId is only set after the request resolves, so without
+    // single-flight both callers pass the cache check and each leaves a
+    // permanent agent behind on the account.
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchImpl = vi.fn(async () => {
+      await gate;
+      return new Response(JSON.stringify({ agent_id: 'agt_created' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    const client = new ElevenLabsClient({
+      apiKey: 'el-secret-key',
+      logger: silent,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const both = Promise.all([
+      client.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.'),
+      client.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.'),
+    ]);
+    release!();
+
+    expect(await both).toEqual(['agt_created', 'agt_created']);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries agent creation after a failure', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('nope', { status: 500 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ agent_id: 'agt_created' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+    const client = new ElevenLabsClient({
+      apiKey: 'el-secret-key',
+      logger: silent,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    // A failed attempt must not latch: the in-flight promise is cleared on
+    // settle, so the next session can try again.
+    await expect(client.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.')).rejects.toThrow();
+    await expect(client.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.')).resolves.toBe(
+      'agt_created',
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it('creates the agent with voice and prompt overrides enabled', async () => {
     const fetchImpl = vi.fn(async () =>
       new Response(JSON.stringify({ agent_id: 'agt_created' }), {
