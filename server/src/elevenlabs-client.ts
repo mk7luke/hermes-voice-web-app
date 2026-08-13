@@ -21,6 +21,20 @@ const VOICES_URL = 'https://api.elevenlabs.io/v1/voices';
  */
 const ASK_HERMES_TIMEOUT_SECONDS = 120;
 
+/**
+ * TTS model for the generated agent.
+ *
+ * The agent is created with `language: 'en'`, and ElevenLabs rejects an English
+ * agent paired with a multilingual model — "English Agents must use turbo or
+ * flash v2" — so the `_v2_5` variants are not an option here. Flash v2 is the
+ * lower-latency of the two allowed, which is what a push-to-talk loop wants.
+ *
+ * Changing `AGENT_LANGUAGE` away from English means changing this too, in the
+ * other direction: a multilingual agent needs a multilingual model.
+ */
+const AGENT_TTS_MODEL = 'eleven_flash_v2';
+const AGENT_LANGUAGE = 'en';
+
 /** ConvAI PCM output. The PWA recreates AudioContext at this rate. */
 export const ELEVENLABS_SAMPLE_RATE = 16_000;
 
@@ -249,7 +263,7 @@ export class ElevenLabsClient {
         conversation_config: {
           agent: {
             first_message: '',
-            language: 'en',
+            language: AGENT_LANGUAGE,
             prompt: {
               prompt: instructions,
               temperature: 0.3,
@@ -258,7 +272,7 @@ export class ElevenLabsClient {
           },
           tts: {
             voice_id: defaultVoiceId,
-            model_id: 'eleven_flash_v2_5',
+            model_id: AGENT_TTS_MODEL,
             agent_output_audio_format: 'pcm_16000',
           },
           asr: { quality: 'high' },

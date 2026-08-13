@@ -206,6 +206,21 @@ describe('ElevenLabsClient', () => {
     expect(tool.response_timeout_secs).toBe(120);
   });
 
+  it('pairs the English agent with an English-only TTS model', async () => {
+    // ElevenLabs rejects language:'en' alongside a multilingual model with
+    // "English Agents must use turbo or flash v2", failing agent creation
+    // outright — so the two fields have to move together.
+    const { impl, calls } = convaiFetch();
+    await client(impl).ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.');
+
+    const config = calls.agentPayloads[0]!.conversation_config as {
+      agent: { language: string };
+      tts: { model_id: string };
+    };
+    expect(config.agent.language).toBe('en');
+    expect(['eleven_flash_v2', 'eleven_turbo_v2']).toContain(config.tts.model_id);
+  });
+
   it('reuses an existing ask_hermes tool instead of piling up duplicates', async () => {
     const { impl, calls } = convaiFetch({
       existingTools: [
