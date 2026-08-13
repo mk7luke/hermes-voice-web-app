@@ -263,11 +263,15 @@ class App {
     localStorage.setItem(VOICE_STORAGE_KEY, value);
   }
 
+  // Switching voice ends the current provider session rather than immediately
+  // opening a new one: the session is established on the first press anyway, so
+  // reconnecting here would hold a socket and the microphone open for a user who
+  // may not speak again.
   async #onVoicePicked(value: string): Promise<void> {
     this.#applyVoiceChoice(value);
     if (this.#sessionActive) {
       await this.#teardown();
-      this.#ui.addSystemNote('Switched voice — session restarted.');
+      this.#ui.addSystemNote('Voice changed — talk again to start a new session.');
       this.#setState('idle');
     }
   }
