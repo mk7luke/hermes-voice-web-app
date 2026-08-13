@@ -1,0 +1,39 @@
+services:
+  hermes-voice:
+    build: .
+    image: hermes-voice-web-app:local
+    container_name: hermes-voice
+    restart: unless-stopped
+
+    # Hermes' api_server binds strictly to 127.0.0.1:8642 on this host, and a
+    # bridge network cannot reach a loopback-bound service (host.docker.internal
+    # does not help — nothing is listening on the bridge gateway address). The
+    # alternative, rebinding Hermes to 0.0.0.0, would widen its exposure. So the
+    # container shares the host network namespace instead: HERMES_API_URL and
+    # HOST=127.0.0.1 then mean exactly what they meant before Docker, and the
+    # app stays loopback-only behind `tailscale serve`.
+    #
+    # Consequence: PORT/HOST from .env control the bind directly. There is no
+    # `ports:` mapping, because there is no network boundary to map across.
+    network_mode: host
+
+    env_file: .env
+
+    # Reports degraded (503) when Hermes itself is unreachable, so an unhealthy
+    # container here can mean either this app or the Hermes gateway is down.
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -qO-
+        - http://127.0.0.1:${PORT:-8790}/health
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
