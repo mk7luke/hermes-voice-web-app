@@ -7,6 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ElevenLabsRealtimeClient } from '../client/src/elevenlabs-realtime.js';
 import {
   RealtimeClient,
   type RealtimeCredentials,
@@ -301,5 +302,43 @@ describe('event dispatch', () => {
       },
     });
     expect(resume.type).toBe('response.create');
+  });
+});
+
+describe('ElevenLabsRealtimeClient', () => {
+  const EL_CREDENTIALS: RealtimeCredentials = {
+    provider: 'elevenlabs',
+    signedUrl: 'wss://api.elevenlabs.io/v1/convai/conversation?token=el-ephem',
+    sampleRate: 16_000,
+    turnMode: 'push_to_talk',
+    conversationId: null,
+    initiation: {
+      type: 'conversation_initiation_client_data',
+      conversation_config_override: { tts: { voice_id: 'Ur4YgPmZBxyEyA0H5yP5' } },
+    },
+  };
+
+  it('sends the server-built initiation payload on open', () => {
+    new ElevenLabsRealtimeClient({}).connect(EL_CREDENTIALS);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    expect(JSON.parse(socket.sent[0]!)).toEqual(EL_CREDENTIALS.initiation);
+  });
+
+  it('does not reach the shared handlers after close, so switching voice cannot reconnect', () => {
+    // Switching provider closes the outgoing transport while #sessionActive is
+    // still true and #transport already points at the incoming one. A close
+    // callback escaping here would schedule a reconnect on the wrong client.
+    const onClose = vi.fn();
+    const client = new ElevenLabsRealtimeClient({ onClose });
+    client.connect(EL_CREDENTIALS);
+    const socket = FakeWebSocket.instances[0]!;
+
+    client.close();
+    socket.drop();
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(socket.closeCalls).toBe(1);
   });
 });

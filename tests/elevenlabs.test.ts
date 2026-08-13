@@ -200,9 +200,11 @@ describe('session start with ElevenLabs', () => {
     await app?.close();
   });
 
-  async function startApp(options: { voices?: string; agentVoices?: string[] } = {}) {
+  async function startApp(
+    options: { voices?: string; agentVoices?: string[]; elevenLabsOnly?: boolean } = {},
+  ) {
     const config = loadConfig({
-      XAI_API_KEY: 'xai-test',
+      ...(options.elevenLabsOnly ? {} : { XAI_API_KEY: 'xai-test' }),
       ELEVENLABS_API_KEY: 'el-test',
       ELEVENLABS_VOICE_ID: '9GJrVnm8x3V1ySKEZC8v',
       ELEVENLABS_VOICES:
@@ -258,7 +260,7 @@ describe('session start with ElevenLabs', () => {
       logger,
       sessions: new SessionStore(config.sessionTtlMs),
       hermes,
-      xai,
+      xai: options.elevenLabsOnly ? null : xai,
       elevenlabs,
       passwordSalt: 'test-salt',
     };
@@ -355,6 +357,23 @@ describe('session start with ElevenLabs', () => {
     // Never the transient selection: the cached agent must not inherit whichever
     // voice happened to be picked first.
     expect(agentVoices).toEqual(['9GJrVnm8x3V1ySKEZC8v', '9GJrVnm8x3V1ySKEZC8v']);
+  });
+
+  it('falls back to the server default when the client names no provider', async () => {
+    // The PWA sends no provider until /api/voice/options resolves, so an
+    // ElevenLabs-only server must not be handed a hardcoded xAI guess.
+    await startApp({ elevenLabsOnly: true });
+    const cookie = await login();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/session/start',
+      headers: { cookie },
+      payload: { turnMode: 'push_to_talk' },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { provider: string; voiceId: string };
+    expect(body.provider).toBe('elevenlabs');
+    expect(body.voiceId).toBe('9GJrVnm8x3V1ySKEZC8v');
   });
 
   it('lists both providers for the picker', async () => {

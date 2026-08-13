@@ -39,7 +39,11 @@ class App {
 
   #state: AppState = 'locked';
   #turnMode: TurnMode = 'push_to_talk';
-  #provider: VoiceProvider = 'xai';
+  // Null until the catalogue loads or a stored choice is applied. Guessing a
+  // provider here would send `xai` to an ElevenLabs-only server for anyone who
+  // talks before /api/voice/options resolves; omitting it lets the server pick
+  // whichever provider it is actually configured for.
+  #provider: VoiceProvider | null = null;
   #voiceId = '';
   #sessionActive = false;
   #capturing = false;
@@ -334,10 +338,7 @@ class App {
 
     this.#setState('connecting');
     try {
-      const credentials = await api.startSession(this.#turnMode, {
-        provider: this.#provider,
-        voiceId: this.#voiceId,
-      });
+      const credentials = await api.startSession(this.#turnMode, this.#voiceChoice());
 
       if (!this.#audio || this.#audioRate !== credentials.sampleRate) {
         await this.#audio?.close();
@@ -416,10 +417,7 @@ class App {
     try {
       // Always mint a fresh token: the previous one may well have expired,
       // and the server hands back the conversation id needed to resume.
-      const credentials = await api.startSession(this.#turnMode, {
-        provider: this.#provider,
-        voiceId: this.#voiceId,
-      });
+      const credentials = await api.startSession(this.#turnMode, this.#voiceChoice());
       this.#useTransport(credentials);
     } catch {
       this.#scheduleReconnect();
@@ -492,6 +490,12 @@ class App {
     } catch {
       /* the local teardown is what matters for privacy */
     }
+  }
+
+  /** Undefined until a voice is chosen, so the server applies its own default. */
+  #voiceChoice(): { provider: VoiceProvider; voiceId: string } | undefined {
+    if (!this.#provider) return undefined;
+    return { provider: this.#provider, voiceId: this.#voiceId };
   }
 
   #useTransport(credentials: RealtimeCredentials): void {
