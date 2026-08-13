@@ -110,8 +110,17 @@ export class ElevenLabsClient {
   /**
    * Return a usable agent id. Prefer the configured one; otherwise create a
    * Hermes front-end agent once per process (with `ask_hermes` as a client tool).
+   *
+   * `defaultVoiceId` must be the stable `ELEVENLABS_VOICE_ID`, never whichever
+   * voice happened to be picked first: the agent is created once and cached for
+   * the life of the process, so binding it to a transient selection would leave
+   * the wrong voice baked into its configuration. Per-session voices are applied
+   * through `conversation_config_override`, which is why the agent is created
+   * with `tts.voice_id` (and the prompt) explicitly marked overridable —
+   * ElevenLabs disables every override by default and silently ignores the ones
+   * an agent has not opted into.
    */
-  async ensureAgent(voiceId: string, instructions: string): Promise<string> {
+  async ensureAgent(defaultVoiceId: string, instructions: string): Promise<string> {
     if (this.#configuredAgentId) return this.#configuredAgentId;
     if (this.#createdAgentId) return this.#createdAgentId;
 
@@ -130,7 +139,7 @@ export class ElevenLabsClient {
             },
           },
           tts: {
-            voice_id: voiceId,
+            voice_id: defaultVoiceId,
             model_id: 'eleven_flash_v2_5',
             agent_output_audio_format: 'pcm_16000',
           },
@@ -138,6 +147,14 @@ export class ElevenLabsClient {
           turn: {
             turn_timeout: 7,
             silence_end_call_timeout: -1,
+          },
+        },
+        platform_settings: {
+          overrides: {
+            conversation_config_override: {
+              agent: { prompt: { prompt: true } },
+              tts: { voice_id: true },
+            },
           },
         },
       },

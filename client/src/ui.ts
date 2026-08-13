@@ -98,8 +98,8 @@ export class Ui {
       this.voiceSelect.append(node);
     }
     this.voiceSelect.value = selected;
-    this.voicePicker.hidden = options.length === 0;
-    this.voiceSelect.disabled = options.length <= 1;
+    // One voice is not a choice — hide the control rather than show it disabled.
+    this.voicePicker.hidden = options.length <= 1;
   }
 
   showBanner(message: string, tone: 'error' | 'info' = 'error'): void {

@@ -139,6 +139,41 @@ describe('ElevenLabsClient', () => {
     );
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it('creates the agent with voice and prompt overrides enabled', async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ agent_id: 'agt_created' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const client = new ElevenLabsClient({
+      apiKey: 'el-secret-key',
+      logger: silent,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await client.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.');
+
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const payload = JSON.parse(init.body as string) as {
+      conversation_config: { tts: { voice_id: string } };
+      platform_settings: {
+        overrides: {
+          conversation_config_override: {
+            agent: { prompt: { prompt: boolean } };
+            tts: { voice_id: boolean };
+          };
+        };
+      };
+    };
+    // ElevenLabs ignores every override an agent has not opted into, so the
+    // per-session voice only works if these flags are set at creation.
+    const overrides = payload.platform_settings.overrides.conversation_config_override;
+    expect(overrides.tts.voice_id).toBe(true);
+    expect(overrides.agent.prompt.prompt).toBe(true);
+    expect(payload.conversation_config.tts.voice_id).toBe('9GJrVnm8x3V1ySKEZC8v');
+  });
 });
 
 describe('buildElevenLabsInitiation', () => {
@@ -165,12 +200,14 @@ describe('session start with ElevenLabs', () => {
     await app?.close();
   });
 
-  async function startApp() {
+  async function startApp(options: { voices?: string; agentVoices?: string[] } = {}) {
     const config = loadConfig({
       XAI_API_KEY: 'xai-test',
       ELEVENLABS_API_KEY: 'el-test',
       ELEVENLABS_VOICE_ID: '9GJrVnm8x3V1ySKEZC8v',
-      ELEVENLABS_VOICES: 'B2 Billy:9GJrVnm8x3V1ySKEZC8v,B3 Blacco:Ur4YgPmZBxyEyA0H5yP5',
+      ELEVENLABS_VOICES:
+        options.voices ??
+        'B2 Billy:9GJrVnm8x3V1ySKEZC8v,B3 Blacco:Ur4YgPmZBxyEyA0H5yP5',
       API_SERVER_KEY: 'hermes-test',
       APP_PASSWORD: PASSWORD,
       SESSION_SECRET: 'y'.repeat(40),
@@ -202,9 +239,16 @@ describe('session start with ElevenLabs', () => {
     const elevenlabs = new ElevenLabsClient({
       apiKey: 'el-test',
       logger,
-      agentId: 'agt_fixed',
+      agentId: options.agentVoices ? null : 'agt_fixed',
       fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
     });
+    if (options.agentVoices) {
+      const seen = options.agentVoices;
+      elevenlabs.ensureAgent = (async (voiceId: string) => {
+        seen.push(voiceId);
+        return 'agt_created';
+      }) as ElevenLabsClient['ensureAgent'];
+    }
     elevenlabs.createSignedUrl = (async () => ({
       signedUrl: 'wss://api.elevenlabs.io/v1/convai/conversation?agent_id=agt_fixed&token=el-ephem',
     })) as ElevenLabsClient['createSignedUrl'];
@@ -277,6 +321,40 @@ describe('session start with ElevenLabs', () => {
     });
     expect(response.statusCode).toBe(400);
     expect(response.json().error).toBe('invalid_voice_id');
+  });
+
+  it('accepts the configured default voice even when the curated list omits it', async () => {
+    await startApp({ voices: 'B3 Blacco:Ur4YgPmZBxyEyA0H5yP5' });
+    const cookie = await login();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/session/start',
+      headers: { cookie },
+      payload: { provider: 'elevenlabs', voiceId: '9GJrVnm8x3V1ySKEZC8v' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect((response.json() as { voiceId: string }).voiceId).toBe('9GJrVnm8x3V1ySKEZC8v');
+  });
+
+  it('creates the lazy agent from the configured voice, whichever voice is picked first', async () => {
+    const agentVoices: string[] = [];
+    await startApp({ agentVoices });
+    const cookie = await login();
+
+    for (const voiceId of ['Ur4YgPmZBxyEyA0H5yP5', '9GJrVnm8x3V1ySKEZC8v']) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/session/start',
+        headers: { cookie },
+        payload: { provider: 'elevenlabs', voiceId },
+      });
+      expect(response.statusCode).toBe(200);
+      expect((response.json() as { voiceId: string }).voiceId).toBe(voiceId);
+    }
+
+    // Never the transient selection: the cached agent must not inherit whichever
+    // voice happened to be picked first.
+    expect(agentVoices).toEqual(['9GJrVnm8x3V1ySKEZC8v', '9GJrVnm8x3V1ySKEZC8v']);
   });
 
   it('lists both providers for the picker', async () => {

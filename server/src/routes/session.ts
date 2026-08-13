@@ -208,7 +208,13 @@ export function registerSessionRoutes(app: FastifyInstance, context: AppContext)
 
     let agentId: string;
     try {
-      agentId = await elevenlabs.ensureAgent(voiceId, config.voiceInstructions);
+      // The generated agent is cached for the process, so it is created from the
+      // stable configured voice; `voiceId` is applied per session via the
+      // initiation override instead.
+      agentId = await elevenlabs.ensureAgent(
+        config.elevenlabsVoiceId,
+        config.voiceInstructions,
+      );
     } catch (error) {
       logger.error('could not ensure an ElevenLabs agent', { error });
       return reply.code(503).send({
@@ -248,6 +254,10 @@ export function registerSessionRoutes(app: FastifyInstance, context: AppContext)
   function resolveElevenLabsVoiceId(requested: string | undefined): string | null {
     const fallback = config.elevenlabsVoiceId;
     if (!fallback) return null;
+    // ELEVENLABS_VOICE_ID is always permitted: the operator set it explicitly and
+    // it is the voice used when the client asks for nothing. A curated
+    // ELEVENLABS_VOICES list narrows the *extra* ids on offer, it does not
+    // revoke the default.
     if (!requested || requested === fallback) return fallback;
     if (!VOICE_ID_RE.test(requested)) return null;
     if (config.elevenlabsVoices.some((voice) => voice.id === requested)) return requested;
