@@ -12,7 +12,7 @@ import type { VoiceProvider } from '../config.js';
 import { VOICE_ID_RE } from '../config.js';
 import type { AppContext } from '../context.js';
 import { requireSession } from '../context.js';
-import { ELEVENLABS_SAMPLE_RATE } from '../elevenlabs-client.js';
+import { ELEVENLABS_SAMPLE_RATE, ElevenLabsError } from '../elevenlabs-client.js';
 import {
   AUDIO_SAMPLE_RATE,
   buildElevenLabsInitiation,
@@ -217,10 +217,14 @@ export function registerSessionRoutes(app: FastifyInstance, context: AppContext)
       );
     } catch (error) {
       logger.error('could not ensure an ElevenLabs agent', { error });
+      // The upstream status is the difference between "wrong key" (401),
+      // "plan does not include Agents" (403) and "we sent something ElevenLabs
+      // rejected" (422). Without it the banner sends people to check a key that
+      // was never the problem. The status alone is safe to show — no body, no URL.
+      const status = error instanceof ElevenLabsError ? ` (ElevenLabs ${error.status})` : '';
       return reply.code(503).send({
         error: 'elevenlabs_unavailable',
-        message:
-          'Could not prepare the ElevenLabs agent. Set ELEVENLABS_AGENT_ID or check the API key.',
+        message: `Could not prepare the ElevenLabs agent${status}. Check the API key, or set ELEVENLABS_AGENT_ID to use an agent you created yourself.`,
       });
     }
 

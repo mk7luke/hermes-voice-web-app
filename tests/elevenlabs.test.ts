@@ -92,24 +92,78 @@ describe('ElevenLabs config', () => {
 });
 
 describe('ElevenLabsClient', () => {
-  it('mints a signed URL without leaking the API key into the result', async () => {
-    const fetchImpl = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          signed_url:
-            'wss://api.elevenlabs.io/v1/convai/conversation?agent_id=agt_1&token=ephem',
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      ),
-    );
-    const client = new ElevenLabsClient({
-      apiKey: 'el-secret-key',
-      logger: silent,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      agentId: 'agt_1',
+  function json(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  /**
+   * Routes the calls the lazy-agent flow makes: list tools, register the
+   * ask_hermes client tool, create the agent.
+   */
+  function convaiFetch(
+    options: {
+      existingTools?: Array<Record<string, unknown>>;
+      gate?: Promise<void>;
+      failAgentTimes?: number;
+    } = {},
+  ) {
+    const calls = {
+      listTools: 0,
+      createTool: 0,
+      createAgent: 0,
+      toolPayloads: [] as Array<Record<string, unknown>>,
+      agentPayloads: [] as Array<Record<string, unknown>>,
+    };
+    let agentFailuresLeft = options.failAgentTimes ?? 0;
+
+    const impl = vi.fn(async (url: string, init: RequestInit) => {
+      if (options.gate) await options.gate;
+      const body = init.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : {};
+
+      if (url.endsWith('/convai/tools')) {
+        if (init.method === 'GET') {
+          calls.listTools += 1;
+          return json({ tools: options.existingTools ?? [] });
+        }
+        calls.createTool += 1;
+        calls.toolPayloads.push(body);
+        return json({ id: 'tool_ask_hermes' });
+      }
+
+      calls.createAgent += 1;
+      calls.agentPayloads.push(body);
+      if (agentFailuresLeft > 0) {
+        agentFailuresLeft -= 1;
+        return new Response('nope', { status: 500 });
+      }
+      return json({ agent_id: 'agt_created' });
     });
 
-    const signed = await client.createSignedUrl('agt_1');
+    return { impl: impl as unknown as typeof fetch, spy: impl, calls };
+  }
+
+  function client(fetchImpl: typeof fetch, agentId?: string) {
+    return new ElevenLabsClient({
+      apiKey: 'el-secret-key',
+      logger: silent,
+      fetchImpl,
+      ...(agentId ? { agentId } : {}),
+    });
+  }
+
+  it('mints a signed URL without leaking the API key into the result', async () => {
+    const fetchImpl = vi.fn(async () =>
+      json({
+        signed_url:
+          'wss://api.elevenlabs.io/v1/convai/conversation?agent_id=agt_1&token=ephem',
+      }),
+    );
+    const el = client(fetchImpl as unknown as typeof fetch, 'agt_1');
+
+    const signed = await el.createSignedUrl('agt_1');
     expect(signed.signedUrl).toContain('token=ephem');
     expect(JSON.stringify(signed)).not.toContain('el-secret-key');
 
@@ -119,25 +173,53 @@ describe('ElevenLabsClient', () => {
   });
 
   it('creates an agent once when none is configured', async () => {
-    const fetchImpl = vi.fn(async () =>
-      new Response(JSON.stringify({ agent_id: 'agt_created' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
-    const client = new ElevenLabsClient({
-      apiKey: 'el-secret-key',
-      logger: silent,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
+    const { impl, calls } = convaiFetch();
+    const el = client(impl);
 
-    await expect(client.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.')).resolves.toBe(
+    await expect(el.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.')).resolves.toBe(
       'agt_created',
     );
-    await expect(client.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.')).resolves.toBe(
+    await expect(el.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.')).resolves.toBe(
       'agt_created',
     );
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(calls.createAgent).toBe(1);
+  });
+
+  it('references ask_hermes by tool id, never inline', async () => {
+    // ElevenLabs has rejected any create request containing `prompt.tools`
+    // since 2025-07-23. Inlining the tool means the agent never gets created.
+    const { impl, calls } = convaiFetch();
+    await client(impl).ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.');
+
+    const config = calls.agentPayloads[0]!.conversation_config as {
+      agent: { prompt: Record<string, unknown> };
+    };
+    expect(config.agent.prompt.tool_ids).toEqual(['tool_ask_hermes']);
+    expect(config.agent.prompt.tools).toBeUndefined();
+
+    const tool = calls.toolPayloads[0]!.tool_config as Record<string, unknown>;
+    expect(tool.type).toBe('client');
+    expect(tool.name).toBe('ask_hermes');
+    expect(tool.expects_response).toBe(true);
+    // Must not abandon a request Hermes is still working on: HERMES_TIMEOUT_MS
+    // defaults to 120s, which is also the ElevenLabs maximum.
+    expect(tool.response_timeout_secs).toBe(120);
+  });
+
+  it('reuses an existing ask_hermes tool instead of piling up duplicates', async () => {
+    const { impl, calls } = convaiFetch({
+      existingTools: [
+        { id: 'tool_other', tool_config: { name: 'something_else' } },
+        { id: 'tool_existing', tool_config: { name: 'ask_hermes' } },
+      ],
+    });
+    await client(impl).ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.');
+
+    expect(calls.createTool).toBe(0);
+    const config = calls.agentPayloads[0]!.conversation_config as {
+      agent: { prompt: { tool_ids: string[] } };
+    };
+    expect(config.agent.prompt.tool_ids).toEqual(['tool_existing']);
   });
 
   it('creates one agent when two sessions start at the same moment', async () => {
@@ -148,71 +230,38 @@ describe('ElevenLabsClient', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const fetchImpl = vi.fn(async () => {
-      await gate;
-      return new Response(JSON.stringify({ agent_id: 'agt_created' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    });
-    const client = new ElevenLabsClient({
-      apiKey: 'el-secret-key',
-      logger: silent,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
+    const { impl, calls } = convaiFetch({ gate });
+    const el = client(impl);
 
     const both = Promise.all([
-      client.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.'),
-      client.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.'),
+      el.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.'),
+      el.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.'),
     ]);
     release!();
 
     expect(await both).toEqual(['agt_created', 'agt_created']);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(calls.createAgent).toBe(1);
+    expect(calls.createTool).toBe(1);
   });
 
   it('retries agent creation after a failure', async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(new Response('nope', { status: 500 }))
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ agent_id: 'agt_created' }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      );
-    const client = new ElevenLabsClient({
-      apiKey: 'el-secret-key',
-      logger: silent,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-
     // A failed attempt must not latch: the in-flight promise is cleared on
     // settle, so the next session can try again.
-    await expect(client.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.')).rejects.toThrow();
-    await expect(client.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.')).resolves.toBe(
+    const { impl, calls } = convaiFetch({ failAgentTimes: 1 });
+    const el = client(impl);
+
+    await expect(el.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.')).rejects.toThrow();
+    await expect(el.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.')).resolves.toBe(
       'agt_created',
     );
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(calls.createAgent).toBe(2);
   });
 
   it('creates the agent with voice and prompt overrides enabled', async () => {
-    const fetchImpl = vi.fn(async () =>
-      new Response(JSON.stringify({ agent_id: 'agt_created' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
-    const client = new ElevenLabsClient({
-      apiKey: 'el-secret-key',
-      logger: silent,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
+    const { impl, calls } = convaiFetch();
+    await client(impl).ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.');
 
-    await client.ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.');
-
-    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    const payload = JSON.parse(init.body as string) as {
+    const payload = calls.agentPayloads[0]! as {
       conversation_config: { tts: { voice_id: string } };
       platform_settings: {
         overrides: {

@@ -10,7 +10,16 @@ import type { Logger } from './logger.js';
 
 const SIGNED_URL_PATH = 'https://api.elevenlabs.io/v1/convai/conversation/get-signed-url';
 const AGENTS_CREATE_URL = 'https://api.elevenlabs.io/v1/convai/agents/create';
+const TOOLS_URL = 'https://api.elevenlabs.io/v1/convai/tools';
 const VOICES_URL = 'https://api.elevenlabs.io/v1/voices';
+
+/**
+ * Hermes' own timeout is 120s (HERMES_TIMEOUT_MS), and 120 is also the maximum
+ * ElevenLabs accepts. `ask_hermes` blocks the conversation while it runs, so the
+ * two need to agree — a shorter value here would abandon a request Hermes is
+ * still working on.
+ */
+const ASK_HERMES_TIMEOUT_SECONDS = 120;
 
 /** ConvAI PCM output. The PWA recreates AudioContext at this rate. */
 export const ELEVENLABS_SAMPLE_RATE = 16_000;
@@ -43,9 +52,16 @@ export interface ElevenLabsClientOptions {
   agentId?: string | null;
 }
 
+/**
+ * Registered through `POST /v1/convai/tools` and referenced by id, not inlined
+ * into the agent. ElevenLabs deprecated `prompt.tools` and has rejected any
+ * request containing it since 2025-07-23; an agent built that way fails to
+ * create at all.
+ */
 const ASK_HERMES_CLIENT_TOOL = {
   type: 'client',
   name: 'ask_hermes',
+  response_timeout_secs: ASK_HERMES_TIMEOUT_SECONDS,
   description:
     'Send a request to Hermes, the agent that holds all memory, tools, files and ' +
     'knowledge. Use this for any question or action beyond conversational filler. ' +
@@ -136,7 +152,43 @@ export class ElevenLabsClient {
     return this.#creatingAgent;
   }
 
+  /**
+   * Return the id of the workspace's `ask_hermes` client tool, registering it
+   * if this account does not have one yet.
+   *
+   * Existing tools are reused by name so a process restart — or a second
+   * deployment against the same account — does not pile up duplicates.
+   */
+  async #ensureAskHermesTool(): Promise<string> {
+    const listed = await this.#requestJson<{ tools?: Array<Record<string, unknown>> }>(
+      TOOLS_URL,
+      { method: 'GET' },
+    );
+    for (const tool of Array.isArray(listed.tools) ? listed.tools : []) {
+      const config = tool.tool_config as { name?: unknown } | undefined;
+      const name = typeof config?.name === 'string' ? config.name : tool.name;
+      if (name !== ASK_HERMES_CLIENT_TOOL.name) continue;
+      const id = toolId(tool);
+      if (id) return id;
+    }
+
+    const created = await this.#requestJson<Record<string, unknown>>(TOOLS_URL, {
+      method: 'POST',
+      payload: { tool_config: ASK_HERMES_CLIENT_TOOL },
+    });
+    const id = toolId(created);
+    if (!id) {
+      throw new ElevenLabsError('ElevenLabs created a tool without an id', 502);
+    }
+    this.#logger.info('registered the ask_hermes client tool', {
+      toolIdPrefix: id.slice(0, 8),
+    });
+    return id;
+  }
+
   async #createAgent(defaultVoiceId: string, instructions: string): Promise<string> {
+    const askHermesToolId = await this.#ensureAskHermesTool();
+
     const body = await this.#requestJson<{ agent_id?: string }>(AGENTS_CREATE_URL, {
       method: 'POST',
       payload: {
@@ -148,7 +200,7 @@ export class ElevenLabsClient {
             prompt: {
               prompt: instructions,
               temperature: 0.3,
-              tools: [ASK_HERMES_CLIENT_TOOL],
+              tool_ids: [askHermesToolId],
             },
           },
           tts: {
@@ -228,6 +280,15 @@ export class ElevenLabsClient {
 
     return (await response.json()) as T;
   }
+}
+
+/** Tool endpoints have returned the id as both `id` and `tool_id`. */
+function toolId(tool: Record<string, unknown>): string | null {
+  for (const key of ['id', 'tool_id'] as const) {
+    const value = tool[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
 }
 
 function safeHost(url: string): string {
