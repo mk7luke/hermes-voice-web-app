@@ -52,7 +52,8 @@ short-lived xAI ephemeral token (default 10 minutes), minted per session.
 
 ## Requirements
 
-- Node.js 20.11+
+- Node.js 20.11+, **or** Docker with Compose (Linux — see
+  [Run with Docker](#run-with-docker))
 - A running Hermes agent with the `api_server` gateway platform enabled
 - An `XAI_API_KEY` with Realtime Voice access, **or**
   `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID` (or both)
@@ -71,14 +72,24 @@ If that returns JSON, you are ready. Use the same `API_SERVER_KEY` value below.
 
 ## Install
 
+Two supported ways to run this: Node directly, or Docker Compose. Both read the
+same `.env`, so configure that first either way.
+
 ```bash
 git clone https://github.com/mk7luke/hermes-voice-web-app.git
 cd hermes-voice-web-app
-npm ci
 cp .env.example .env && chmod 600 .env
 $EDITOR .env          # fill in the required values
+```
+
+For the Node path, also build:
+
+```bash
+npm ci
 npm run build
 ```
+
+With Docker, skip those two — the image builds itself.
 
 Generate the session secret with:
 
@@ -116,6 +127,51 @@ curl http://127.0.0.1:8787/health
 
 `"hermes":"unreachable"` means this app is fine but cannot see the agent — check
 `HERMES_API_URL` and that the `api_server` platform is running.
+
+## Run with Docker
+
+```bash
+docker compose up -d --build
+docker compose logs -f
+curl http://127.0.0.1:8787/health
+```
+
+That is the whole setup. The image builds the client and server itself, so you
+do not need Node, `npm ci`, or `npm run build` on the host — only a `.env`.
+
+```bash
+docker compose ps          # STATUS shows healthy once /health returns 200
+docker compose restart     # after editing .env
+docker compose up -d --build   # after pulling new code
+docker compose down        # stop and remove
+```
+
+Three things about this setup are deliberate and worth knowing before you change
+them:
+
+**Host networking, no port mapping.** Hermes' `api_server` binds strictly to
+`127.0.0.1:8642`, and a container on a bridge network cannot reach a
+loopback-bound service on the host — `host.docker.internal` does not help,
+because nothing is listening on the bridge gateway address. The alternative,
+rebinding Hermes to `0.0.0.0`, would widen your agent's exposure. So the
+container joins the host network namespace instead. `HOST` and `PORT` from
+`.env` therefore control the bind directly, exactly as they did without Docker,
+and `tailscale serve` in front of it works unchanged.
+
+Host networking is a Linux feature. On Docker Desktop for macOS or Windows it
+behaves differently, and this compose file assumes Linux — which is where you
+would be running Hermes anyway.
+
+**No configuration in the image.** `.env` is excluded by `.dockerignore` and
+injected at run time through `env_file`, so the image holds no secrets and is
+safe to rebuild, tag, or discard. Nothing here needs a registry.
+
+**Restarts are already handled.** `restart: unless-stopped` plus a `/health`
+healthcheck means Compose replaces the systemd unit below — you want one or the
+other, not both.
+
+Logs are JSON-file capped at 3 × 10 MB, so an unattended box will not fill its
+disk with transcript noise.
 
 ## Secure remote access
 
@@ -163,6 +219,9 @@ Brief network drops reconnect automatically and resume the same conversation.
 The microphone is released whenever you end a session or background the app.
 
 ## Run as a service
+
+Skip this if you used Docker Compose — `restart: unless-stopped` already does
+the same job. This is the equivalent for a plain Node install.
 
 ```ini
 # /etc/systemd/system/hermes-voice.service
@@ -222,6 +281,8 @@ client/public/worklets/   AudioWorklet processors (capture + playback)
 tests/         Vitest suite (config, auth, clients, routes, realtime, elevenlabs)
 scripts/       PWA icon generation
 docs/PRD.md    Design document
+Dockerfile          Two-stage build; runtime image carries no configuration
+docker-compose.yml  Host-networked service, env_file, /health healthcheck
 ```
 
 ### Tests
@@ -257,6 +318,8 @@ which Hermes session it talks to.
 | 503 `xai_unavailable` | `XAI_API_KEY` invalid or lacks Realtime Voice access. |
 | Logged out repeatedly | Server restarted — sessions are in-memory by design. |
 | Cannot install to home screen | Must be HTTPS with the manifest reachable. |
+| Container stuck `unhealthy` | `/health` is probed on `PORT` from `.env`; a `PORT` the app is not bound to never answers. |
+| Container healthy, `hermes: unreachable` | `network_mode: host` was changed, or `HERMES_API_URL` does not point at the host's loopback. |
 
 ## Not in v1
 
