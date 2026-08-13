@@ -23,8 +23,10 @@ You run it yourself, on your own hardware, against your own agent. It is single-
 by design — one passphrase, one conversation — which keeps the trust model small
 enough to read in an afternoon.
 
-Audio runs browser ↔ xAI Realtime Voice for low latency. Everything that needs
-trust — memory, tools, credentials — stays with Hermes behind this server.
+Audio runs browser ↔ xAI Realtime Voice or ElevenLabs Agents for low latency.
+Everything that needs trust — memory, tools, credentials — stays with Hermes
+behind this server. Custom ElevenLabs voice ids (generated, cloned, designed)
+are first-class: pick them in the PWA.
 
 See [`docs/PRD.md`](docs/PRD.md) for the design and the reasoning behind it.
 
@@ -33,12 +35,12 @@ See [`docs/PRD.md`](docs/PRD.md) for the design and the reasoning behind it.
 ## How it fits together
 
 ```
-Phone (PWA) ──audio──> xAI Realtime (grok-voice-latest)
+Phone (PWA) ──audio──> xAI Realtime  OR  ElevenLabs Agents (voice_id)
      │                        │
      │                   ask_hermes tool call
      │                        v
      └──cookie auth──> hermes-voice server ──Bearer──> Hermes (127.0.0.1:8642)
-                       (holds all secrets)              Grok 4.5 + memory + tools
+                       (holds all secrets)              Grok + memory + tools
 ```
 
 The voice model handles listening and speaking. It gets exactly one tool,
@@ -52,7 +54,8 @@ short-lived xAI ephemeral token (default 10 minutes), minted per session.
 
 - Node.js 20.11+
 - A running Hermes agent with the `api_server` gateway platform enabled
-- An `XAI_API_KEY` with Realtime Voice access
+- An `XAI_API_KEY` with Realtime Voice access, **or**
+  `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID` (or both)
 - HTTPS (browsers refuse microphone access otherwise)
 
 ## Enable the Hermes API server
@@ -87,7 +90,10 @@ Required variables — see `.env.example` for the full annotated list:
 
 | Variable | Purpose |
 |---|---|
-| `XAI_API_KEY` | xAI key with Realtime Voice access. Server-side only. |
+| `XAI_API_KEY` | xAI key with Realtime Voice access. Server-side only. Optional if ElevenLabs is set. |
+| `ELEVENLABS_API_KEY` | ElevenLabs key. Server-side only. Optional if xAI is set. |
+| `ELEVENLABS_VOICE_ID` | Required with the ElevenLabs key. Any custom / generated / cloned id. |
+| `VOICE_PROVIDER` | `xai` or `elevenlabs`. Default when both providers are configured. |
 | `API_SERVER_KEY` | Bearer key for the Hermes `api_server` platform. |
 | `APP_PASSWORD` | Passphrase for the web app. |
 | `SESSION_SECRET` | ≥32 chars, signs session cookies. |
@@ -200,7 +206,7 @@ while you are talking.
 ```bash
 npm run dev          # server on :8787, serving the built client
 npm run dev:client   # Vite dev server with HMR, proxying /api to :8787
-npm test             # 95 tests
+npm test             # vitest
 npm run typecheck    # server + client
 ```
 
@@ -213,7 +219,7 @@ Browsers treat `localhost` as a secure context, so the microphone still works.
 server/src/    Fastify server — config, auth, Hermes + xAI clients, routes
 client/src/    Vite + vanilla TypeScript PWA — audio, realtime socket, UI
 client/public/worklets/   AudioWorklet processors (capture + playback)
-tests/         Vitest suite
+tests/         Vitest suite (config, auth, clients, routes, realtime, elevenlabs)
 scripts/       PWA icon generation
 docs/PRD.md    Design document
 ```

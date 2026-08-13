@@ -8,7 +8,7 @@
  * the page. The security boundary is the tool bridge, not this object.
  */
 
-import type { Config } from './config.js';
+import type { Config, VoiceProvider } from './config.js';
 
 /** PCM16 at 24 kHz — xAI's default and the best-supported browser path. */
 export const AUDIO_SAMPLE_RATE = 24_000;
@@ -83,6 +83,30 @@ export function buildVoiceSession(
     // Lets a dropped socket rejoin the same conversation instead of starting
     // over — the phone-on-a-train case.
     resumption: { enabled: true },
+  };
+}
+
+export interface VoiceChoice {
+  provider: VoiceProvider;
+  voiceId: string;
+  name: string;
+}
+
+/** First message the ElevenLabs socket expects, including the voice_id override. */
+export function buildElevenLabsInitiation(
+  config: Config,
+  voiceId: string,
+): Record<string, unknown> {
+  return {
+    type: 'conversation_initiation_client_data',
+    conversation_config_override: {
+      agent: {
+        prompt: { prompt: config.voiceInstructions },
+      },
+      tts: {
+        voice_id: voiceId,
+      },
+    },
   };
 }
 

@@ -6,29 +6,48 @@
 import * as api from './api.js';
 import { ApiError } from './api.js';
 import { AudioEngine, base64ToPcm16, pcm16ToBase64 } from './audio.js';
-import { RealtimeClient } from './realtime.js';
+import { ElevenLabsRealtimeClient } from './elevenlabs-realtime.js';
+import { RealtimeClient, type RealtimeCredentials, type RealtimeHandlers } from './realtime.js';
 import { Ui, type AppState } from './ui.js';
 import './styles.css';
 
 type TurnMode = 'push_to_talk' | 'hands_free';
+type VoiceProvider = 'xai' | 'elevenlabs';
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const MODE_STORAGE_KEY = 'hermes-voice.turn-mode';
+const VOICE_STORAGE_KEY = 'hermes-voice.voice-choice';
+
+interface Transport {
+  readonly connected: boolean;
+  connect(credentials: RealtimeCredentials): void;
+  appendAudio(base64: string): void;
+  commitTurn(): void;
+  clearInput(): void;
+  cancelResponse(): void;
+  sendToolResult(callId: string, output: string): void;
+  close(): void;
+}
 
 class App {
   readonly #ui = new Ui();
-  readonly #realtime: RealtimeClient;
+  readonly #xai: RealtimeClient;
+  readonly #eleven: ElevenLabsRealtimeClient;
+  #transport: Transport;
   #audio: AudioEngine | null = null;
+  #audioRate = 0;
 
   #state: AppState = 'locked';
   #turnMode: TurnMode = 'push_to_talk';
+  #provider: VoiceProvider = 'xai';
+  #voiceId = '';
   #sessionActive = false;
   #capturing = false;
   #reconnectAttempts = 0;
   #reconnectTimer: number | null = null;
 
   constructor() {
-    this.#realtime = new RealtimeClient({
+    const handlers: RealtimeHandlers = {
       onOpen: () => {
         this.#reconnectAttempts = 0;
         this.#ui.hideBanner();
@@ -81,7 +100,10 @@ class App {
         if (intentional || !this.#sessionActive) return;
         this.#scheduleReconnect();
       },
-    });
+    };
+    this.#xai = new RealtimeClient(handlers);
+    this.#eleven = new ElevenLabsRealtimeClient(handlers);
+    this.#transport = this.#xai;
   }
 
   async start(): Promise<void> {
@@ -134,6 +156,7 @@ class App {
   #onAuthenticated(): void {
     this.#ui.showApp();
     this.#setState('idle');
+    void this.#loadVoiceOptions();
   }
 
   // --- Controls -------------------------------------------------------------
@@ -166,6 +189,10 @@ class App {
 
     this.#ui.modeButton.addEventListener('click', () => {
       void this.#toggleMode();
+    });
+
+    this.#ui.voiceSelect.addEventListener('change', () => {
+      void this.#onVoicePicked(this.#ui.voiceSelect.value);
     });
 
     this.#ui.endButton.addEventListener('click', () => {
@@ -203,6 +230,48 @@ class App {
     }
   }
 
+  async #loadVoiceOptions(): Promise<void> {
+    try {
+      const catalogue = await api.voiceOptions();
+      const options: Array<{ value: string; label: string }> = [];
+      for (const provider of catalogue.providers) {
+        for (const voice of provider.voices) {
+          options.push({
+            value: `${provider.id}:${voice.id}`,
+            label: `${provider.label} · ${voice.name}`,
+          });
+        }
+      }
+      const stored = localStorage.getItem(VOICE_STORAGE_KEY);
+      const fallback = `${catalogue.defaultProvider}:${catalogue.defaultVoiceId ?? ''}`;
+      const selected = stored && options.some((option) => option.value === stored) ? stored : fallback;
+      this.#applyVoiceChoice(selected);
+      this.#ui.setVoiceOptions(options, selected);
+    } catch {
+      /* picker is optional; session start still uses server default */
+    }
+  }
+
+  #applyVoiceChoice(value: string): void {
+    const colon = value.indexOf(':');
+    if (colon < 0) return;
+    const provider = value.slice(0, colon);
+    const voiceId = value.slice(colon + 1);
+    if (provider !== 'xai' && provider !== 'elevenlabs') return;
+    this.#provider = provider;
+    this.#voiceId = voiceId;
+    localStorage.setItem(VOICE_STORAGE_KEY, value);
+  }
+
+  async #onVoicePicked(value: string): Promise<void> {
+    this.#applyVoiceChoice(value);
+    if (this.#sessionActive) {
+      await this.#teardown();
+      this.#ui.addSystemNote('Switched voice — session restarted.');
+      this.#setState('idle');
+    }
+  }
+
   // --- Talking --------------------------------------------------------------
 
   async #onPressStart(): Promise<void> {
@@ -219,7 +288,7 @@ class App {
 
     // Pressing while the assistant is speaking means "stop and listen to me".
     this.#bargeIn();
-    this.#realtime.clearInput();
+    this.#transport.clearInput();
     this.#capturing = true;
     this.#setState('listening');
   }
@@ -243,33 +312,37 @@ class App {
 
     if (!this.#capturing) return;
     this.#capturing = false;
-    this.#realtime.commitTurn();
+    this.#transport.commitTurn();
     this.#setState('thinking');
   }
 
   #bargeIn(): void {
     this.#audio?.stopPlayback();
     if (this.#state === 'speaking') {
-      this.#realtime.cancelResponse();
+      this.#transport.cancelResponse();
     }
   }
 
   // --- Session lifecycle ----------------------------------------------------
 
   async #ensureSession(): Promise<void> {
-    if (this.#sessionActive && this.#realtime.connected) return;
+    if (this.#sessionActive && this.#transport.connected) return;
 
     this.#setState('connecting');
     try {
-      const credentials = await api.startSession(this.#turnMode);
+      const credentials = await api.startSession(this.#turnMode, {
+        provider: this.#provider,
+        voiceId: this.#voiceId,
+      });
 
-      if (!this.#audio) {
+      if (!this.#audio || this.#audioRate !== credentials.sampleRate) {
+        await this.#audio?.close();
         this.#audio = new AudioEngine({
           sampleRate: credentials.sampleRate,
           onAudio: (pcm16) => {
             // In push-to-talk, only stream while the button is held.
             if (this.#turnMode === 'push_to_talk' && !this.#capturing) return;
-            this.#realtime.appendAudio(pcm16ToBase64(pcm16));
+            this.#transport.appendAudio(pcm16ToBase64(pcm16));
           },
           onPlaybackStateChange: (speaking) => {
             if (speaking) {
@@ -279,6 +352,7 @@ class App {
             }
           },
         });
+        this.#audioRate = credentials.sampleRate;
       }
 
       // Requires a user gesture on iOS — this call chain always originates
@@ -286,7 +360,7 @@ class App {
       await this.#audio.init();
       this.#ui.setMuted(this.#audio.muted);
 
-      this.#realtime.connect(credentials);
+      this.#useTransport(credentials);
       this.#sessionActive = true;
       this.#updateTalkLabel();
     } catch (error) {
@@ -338,8 +412,11 @@ class App {
     try {
       // Always mint a fresh token: the previous one may well have expired,
       // and the server hands back the conversation id needed to resume.
-      const credentials = await api.startSession(this.#turnMode);
-      this.#realtime.connect(credentials);
+      const credentials = await api.startSession(this.#turnMode, {
+        provider: this.#provider,
+        voiceId: this.#voiceId,
+      });
+      this.#useTransport(credentials);
     } catch {
       this.#scheduleReconnect();
     }
@@ -351,7 +428,7 @@ class App {
     args: string;
   }): Promise<void> {
     if (call.name !== 'ask_hermes') {
-      this.#realtime.sendToolResult(call.callId, `Unknown tool: ${call.name}`);
+      this.#transport.sendToolResult(call.callId, `Unknown tool: ${call.name}`);
       return;
     }
 
@@ -364,7 +441,7 @@ class App {
     }
 
     if (!requestText) {
-      this.#realtime.sendToolResult(call.callId, 'No request was provided.');
+      this.#transport.sendToolResult(call.callId, 'No request was provided.');
       return;
     }
 
@@ -373,14 +450,14 @@ class App {
 
     try {
       const result = await api.askHermes(call.callId, requestText);
-      this.#realtime.sendToolResult(call.callId, result.output);
+      this.#transport.sendToolResult(call.callId, result.output);
     } catch (error) {
       const message =
         error instanceof ApiError && error.status === 401
           ? 'The session expired. Please sign in again.'
           : 'Hermes could not be reached.';
       this.#ui.showBanner(message);
-      this.#realtime.sendToolResult(call.callId, message);
+      this.#transport.sendToolResult(call.callId, message);
     }
   }
 
@@ -401,15 +478,23 @@ class App {
     this.#capturing = false;
     this.#sessionActive = false;
 
-    this.#realtime.close();
+    this.#transport.close();
     await this.#audio?.close();
     this.#audio = null;
+    this.#audioRate = 0;
 
     try {
       await api.endSession();
     } catch {
       /* the local teardown is what matters for privacy */
     }
+  }
+
+  #useTransport(credentials: RealtimeCredentials): void {
+    this.#xai.close();
+    this.#eleven.close();
+    this.#transport = credentials.provider === 'elevenlabs' ? this.#eleven : this.#xai;
+    this.#transport.connect(credentials);
   }
 
   #setState(state: AppState): void {

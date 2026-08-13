@@ -44,6 +44,8 @@ export class Ui {
   readonly transcript = element<HTMLDivElement>('transcript');
   readonly muteButton = element<HTMLButtonElement>('mute-button');
   readonly modeButton = element<HTMLButtonElement>('mode-button');
+  readonly voiceSelect = element<HTMLSelectElement>('voice-select');
+  readonly voicePicker = element<HTMLLabelElement>('voice-picker');
   readonly endButton = element<HTMLButtonElement>('end-button');
   readonly banner = element<HTMLDivElement>('banner');
 
@@ -82,6 +84,22 @@ export class Ui {
 
   setMode(mode: 'push_to_talk' | 'hands_free'): void {
     this.modeButton.textContent = mode === 'hands_free' ? 'Hands-free' : 'Hold to talk';
+  }
+
+  setVoiceOptions(
+    options: Array<{ value: string; label: string }>,
+    selected: string,
+  ): void {
+    this.voiceSelect.replaceChildren();
+    for (const option of options) {
+      const node = document.createElement('option');
+      node.value = option.value;
+      node.textContent = option.label;
+      this.voiceSelect.append(node);
+    }
+    this.voiceSelect.value = selected;
+    this.voicePicker.hidden = options.length === 0;
+    this.voiceSelect.disabled = options.length <= 1;
   }
 
   showBanner(message: string, tone: 'error' | 'info' = 'error'): void {

@@ -6,11 +6,23 @@
  * their phone, so every required value is checked here.
  */
 
+export type VoiceProvider = 'xai' | 'elevenlabs';
+
 export interface Config {
-  readonly xaiApiKey: string;
+  readonly defaultVoiceProvider: VoiceProvider;
+  readonly xaiEnabled: boolean;
+  readonly elevenlabsEnabled: boolean;
+
+  readonly xaiApiKey: string | null;
   readonly xaiVoiceModel: string;
   readonly xaiVoice: string;
   readonly xaiTokenTtlSeconds: number;
+
+  readonly elevenlabsApiKey: string | null;
+  readonly elevenlabsVoiceId: string | null;
+  readonly elevenlabsAgentId: string | null;
+  /** Optional curated list. Empty means "use the account catalogue". */
+  readonly elevenlabsVoices: ReadonlyArray<{ id: string; name: string }>;
 
   readonly hermesApiUrl: string;
   readonly hermesApiKey: string;
@@ -95,6 +107,43 @@ function boolean(env: NodeJS.ProcessEnv, key: string, fallback: boolean): boolea
   throw new ConfigError(`${key} must be true or false, got "${raw}".`);
 }
 
+const VOICE_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+function parseVoiceProvider(env: NodeJS.ProcessEnv): VoiceProvider | null {
+  const raw = env.VOICE_PROVIDER?.trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === 'xai' || raw === 'elevenlabs') return raw;
+  throw new ConfigError(`VOICE_PROVIDER must be xai or elevenlabs, got "${raw}".`);
+}
+
+function parseNamedVoices(raw: string | undefined): Array<{ id: string; name: string }> {
+  if (!raw?.trim()) return [];
+  const out: Array<{ id: string; name: string }> = [];
+  for (const part of raw.split(',')) {
+    const piece = part.trim();
+    if (!piece) continue;
+    const colon = piece.lastIndexOf(':');
+    const name = colon > 0 ? piece.slice(0, colon).trim() : piece;
+    const id = colon > 0 ? piece.slice(colon + 1).trim() : piece;
+    if (!VOICE_ID_RE.test(id)) {
+      throw new ConfigError(
+        `ELEVENLABS_VOICES entry "${piece}" is not a valid voice id.`,
+      );
+    }
+    out.push({ id, name: name || id });
+  }
+  return out;
+}
+
+function optionalVoiceId(env: NodeJS.ProcessEnv, key: string): string | null {
+  const value = env[key]?.trim();
+  if (!value) return null;
+  if (!VOICE_ID_RE.test(value)) {
+    throw new ConfigError(`${key} must be an ElevenLabs voice id (8-64 letters/digits).`);
+  }
+  return value;
+}
+
 function logLevel(env: NodeJS.ProcessEnv): Config['logLevel'] {
   const raw = optional(env, 'LOG_LEVEL', 'info').toLowerCase();
   if (raw === 'debug' || raw === 'info' || raw === 'warn' || raw === 'error') {
@@ -133,14 +182,57 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   const sessionTtlHours = integer(env, 'SESSION_TTL_HOURS', 168, { min: 1, max: 8760 });
 
+  const xaiApiKey = env.XAI_API_KEY?.trim() || null;
+  const elevenlabsApiKey = env.ELEVENLABS_API_KEY?.trim() || null;
+  const elevenlabsVoiceId = optionalVoiceId(env, 'ELEVENLABS_VOICE_ID');
+  const elevenlabsVoices = parseNamedVoices(env.ELEVENLABS_VOICES);
+  const elevenlabsEnabled = Boolean(elevenlabsApiKey && elevenlabsVoiceId);
+  const xaiEnabled = Boolean(xaiApiKey);
+
+  if (!xaiEnabled && !elevenlabsEnabled) {
+    throw new ConfigError(
+      'Configure at least one voice provider: XAI_API_KEY, or ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID.',
+    );
+  }
+  if (elevenlabsApiKey && !elevenlabsVoiceId) {
+    throw new ConfigError(
+      'ELEVENLABS_API_KEY is set but ELEVENLABS_VOICE_ID is missing. Custom voice ids are required.',
+    );
+  }
+
+  const requested = parseVoiceProvider(env);
+  let defaultVoiceProvider: VoiceProvider;
+  if (requested) {
+    if (requested === 'xai' && !xaiEnabled) {
+      throw new ConfigError('VOICE_PROVIDER=xai but XAI_API_KEY is not set.');
+    }
+    if (requested === 'elevenlabs' && !elevenlabsEnabled) {
+      throw new ConfigError(
+        'VOICE_PROVIDER=elevenlabs but ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID are not set.',
+      );
+    }
+    defaultVoiceProvider = requested;
+  } else {
+    defaultVoiceProvider = xaiEnabled ? 'xai' : 'elevenlabs';
+  }
+
   return {
-    xaiApiKey: required(env, 'XAI_API_KEY'),
+    defaultVoiceProvider,
+    xaiEnabled,
+    elevenlabsEnabled,
+
+    xaiApiKey,
     xaiVoiceModel: optional(env, 'XAI_VOICE_MODEL', 'grok-voice-latest'),
     xaiVoice: optional(env, 'XAI_VOICE', 'eve'),
     xaiTokenTtlSeconds: integer(env, 'XAI_TOKEN_TTL_SECONDS', 600, {
       min: 60,
       max: MAX_XAI_TOKEN_TTL_SECONDS,
     }),
+
+    elevenlabsApiKey,
+    elevenlabsVoiceId,
+    elevenlabsAgentId: env.ELEVENLABS_AGENT_ID?.trim() || null,
+    elevenlabsVoices,
 
     hermesApiUrl: normaliseBaseUrl(
       optional(env, 'HERMES_API_URL', 'http://127.0.0.1:8642'),
@@ -166,4 +258,4 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   };
 }
 
-export { ConfigError, DEFAULT_VOICE_INSTRUCTIONS };
+export { ConfigError, DEFAULT_VOICE_INSTRUCTIONS, VOICE_ID_RE };

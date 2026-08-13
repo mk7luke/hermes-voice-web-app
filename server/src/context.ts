@@ -10,6 +10,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { AppSession, SessionStore } from './auth.js';
 import { SESSION_COOKIE, verifySessionId } from './auth.js';
 import type { Config } from './config.js';
+import type { ElevenLabsClient } from './elevenlabs-client.js';
 import type { HermesClient } from './hermes-client.js';
 import type { Logger } from './logger.js';
 import type { XaiClient } from './xai-client.js';
@@ -19,7 +20,8 @@ export interface AppContext {
   readonly logger: Logger;
   readonly sessions: SessionStore;
   readonly hermes: HermesClient;
-  readonly xai: XaiClient;
+  readonly xai: XaiClient | null;
+  readonly elevenlabs: ElevenLabsClient | null;
   /** Per-process salt for passphrase hashing. */
   readonly passwordSalt: string;
 }

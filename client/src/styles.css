@@ -109,7 +109,34 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 14px 18px;
+}
+
+.voice-picker {
+  display: flex;
+  align-items: center;
+}
+
+.voice-picker__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+.voice-picker select {
+  max-width: 42vw;
+  padding: 8px 12px;
+  font-size: 16px;
+  color: var(--text);
+  background: var(--surface);
+  border: none;
+  border-radius: 999px;
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .status {

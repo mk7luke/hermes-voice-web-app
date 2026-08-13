@@ -12,6 +12,7 @@ import { buildApp } from './app.js';
 import { SessionStore } from './auth.js';
 import { ConfigError, loadConfig } from './config.js';
 import type { AppContext } from './context.js';
+import { ElevenLabsClient } from './elevenlabs-client.js';
 import { HermesClient } from './hermes-client.js';
 import { createLogger } from './logger.js';
 import { XaiClient } from './xai-client.js';
@@ -45,7 +46,14 @@ async function main(): Promise<void> {
       timeoutMs: config.hermesTimeoutMs,
       logger,
     }),
-    xai: new XaiClient({ apiKey: config.xaiApiKey, logger }),
+    xai: config.xaiApiKey ? new XaiClient({ apiKey: config.xaiApiKey, logger }) : null,
+    elevenlabs: config.elevenlabsApiKey
+      ? new ElevenLabsClient({
+          apiKey: config.elevenlabsApiKey,
+          logger,
+          agentId: config.elevenlabsAgentId,
+        })
+      : null,
     // Rotating the salt per process means restarting invalidates nothing
     // important (sessions are in-memory anyway) while keeping the hash inputs
     // out of any on-disk artefact.
@@ -75,6 +83,7 @@ async function main(): Promise<void> {
     host: config.host,
     port: config.port,
     hermesApiUrl: config.hermesApiUrl,
+    voiceProvider: config.defaultVoiceProvider,
     voiceModel: config.xaiVoiceModel,
   });
 

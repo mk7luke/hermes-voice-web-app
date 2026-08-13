@@ -69,6 +69,7 @@ async function harness(): Promise<Harness> {
     sessions: new SessionStore(config.sessionTtlMs),
     hermes,
     xai,
+    elevenlabs: null,
     passwordSalt: 'test-salt',
   };
 
