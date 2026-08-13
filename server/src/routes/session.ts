@@ -221,10 +221,12 @@ export function registerSessionRoutes(app: FastifyInstance, context: AppContext)
       // "plan does not include Agents" (403) and "we sent something ElevenLabs
       // rejected" (422). Without it the banner sends people to check a key that
       // was never the problem. The status alone is safe to show — no body, no URL.
-      const status = error instanceof ElevenLabsError ? ` (ElevenLabs ${error.status})` : '';
+      const upstream = error instanceof ElevenLabsError ? error : null;
+      const status = upstream ? ` (ElevenLabs ${upstream.status})` : '';
+      const detail = upstream?.detail ? ` ${upstream.detail}` : '';
       return reply.code(503).send({
         error: 'elevenlabs_unavailable',
-        message: `Could not prepare the ElevenLabs agent${status}. Check the API key, or set ELEVENLABS_AGENT_ID to use an agent you created yourself.`,
+        message: `Could not prepare the ElevenLabs agent${status}.${detail} Check the API key, or set ELEVENLABS_AGENT_ID to use an agent you created yourself.`,
       });
     }
 

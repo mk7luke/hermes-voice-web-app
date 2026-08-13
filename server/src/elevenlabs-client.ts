@@ -26,12 +26,62 @@ export const ELEVENLABS_SAMPLE_RATE = 16_000;
 
 export class ElevenLabsError extends Error {
   readonly status: number;
+  /** Upstream validation text, when ElevenLabs sent any. */
+  readonly detail: string | null;
 
-  constructor(message: string, status: number) {
-    super(message);
+  constructor(message: string, status: number, detail: string | null = null) {
+    super(detail ? `${message}: ${detail}` : message);
     this.name = 'ElevenLabsError';
     this.status = status;
+    this.detail = detail;
   }
+}
+
+/** Longest upstream message worth carrying into a log line or a banner. */
+const MAX_DETAIL_LENGTH = 400;
+
+/**
+ * Pull the human-readable part out of an ElevenLabs error response.
+ *
+ * Their validation errors arrive as `{"detail": [{"loc": [...], "msg": "..."}]}`
+ * or `{"detail": {"message": "..."}}` depending on the endpoint, so this walks
+ * the common shapes and falls back to raw text.
+ */
+async function readErrorDetail(response: Response): Promise<string | null> {
+  let raw: string;
+  try {
+    raw = await response.text();
+  } catch {
+    return null;
+  }
+  if (!raw.trim()) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return raw.slice(0, MAX_DETAIL_LENGTH);
+  }
+
+  const detail = (parsed as { detail?: unknown })?.detail ?? parsed;
+
+  if (Array.isArray(detail)) {
+    const parts = detail.map((entry) => {
+      const item = entry as { loc?: unknown; msg?: unknown };
+      const where = Array.isArray(item.loc) ? item.loc.join('.') : '';
+      const what = typeof item.msg === 'string' ? item.msg : JSON.stringify(entry);
+      return where ? `${where}: ${what}` : what;
+    });
+    return parts.join('; ').slice(0, MAX_DETAIL_LENGTH);
+  }
+
+  if (detail && typeof detail === 'object') {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === 'string') return message.slice(0, MAX_DETAIL_LENGTH);
+    return JSON.stringify(detail).slice(0, MAX_DETAIL_LENGTH);
+  }
+
+  return String(detail).slice(0, MAX_DETAIL_LENGTH);
 }
 
 export interface ElevenLabsVoice {
@@ -102,6 +152,7 @@ export class ElevenLabsClient {
     const url = `${SIGNED_URL_PATH}?agent_id=${encodeURIComponent(agentId)}`;
     const body = await this.#requestJson<{ signed_url?: string }>(url, {
       method: 'GET',
+      label: 'signed-url',
     });
     if (!body.signed_url) {
       throw new ElevenLabsError('ElevenLabs returned no signed_url', 502);
@@ -112,7 +163,7 @@ export class ElevenLabsClient {
   async listVoices(): Promise<ElevenLabsVoice[]> {
     const body = await this.#requestJson<{ voices?: Array<Record<string, unknown>> }>(
       VOICES_URL,
-      { method: 'GET' },
+      { method: 'GET', label: 'list-voices' },
     );
     const voices = Array.isArray(body.voices) ? body.voices : [];
     return voices
@@ -162,7 +213,7 @@ export class ElevenLabsClient {
   async #ensureAskHermesTool(): Promise<string> {
     const listed = await this.#requestJson<{ tools?: Array<Record<string, unknown>> }>(
       TOOLS_URL,
-      { method: 'GET' },
+      { method: 'GET', label: 'list-tools' },
     );
     for (const tool of Array.isArray(listed.tools) ? listed.tools : []) {
       const config = tool.tool_config as { name?: unknown } | undefined;
@@ -174,6 +225,7 @@ export class ElevenLabsClient {
 
     const created = await this.#requestJson<Record<string, unknown>>(TOOLS_URL, {
       method: 'POST',
+      label: 'create-tool',
       payload: { tool_config: ASK_HERMES_CLIENT_TOOL },
     });
     const id = toolId(created);
@@ -191,6 +243,7 @@ export class ElevenLabsClient {
 
     const body = await this.#requestJson<{ agent_id?: string }>(AGENTS_CREATE_URL, {
       method: 'POST',
+      label: 'create-agent',
       payload: {
         name: 'Hermes Voice',
         conversation_config: {
@@ -241,7 +294,7 @@ export class ElevenLabsClient {
 
   async #requestJson<T>(
     url: string,
-    init: { method: string; payload?: unknown },
+    init: { method: string; payload?: unknown; label?: string },
   ): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
@@ -268,13 +321,21 @@ export class ElevenLabsClient {
     }
 
     if (!response.ok) {
+      // A bare status is not diagnosable: a 400 from agent creation means one
+      // named field was rejected, and only the body says which. It is
+      // ElevenLabs' own validation text, not ours, and every log line still
+      // goes through `redact()`.
+      const detail = await readErrorDetail(response);
       this.#logger.error('ElevenLabs request failed', {
+        request: init.label ?? init.method,
         status: response.status,
         urlHost: safeHost(url),
+        detail,
       });
       throw new ElevenLabsError(
         `ElevenLabs returned ${response.status}`,
         response.status,
+        detail,
       );
     }
 

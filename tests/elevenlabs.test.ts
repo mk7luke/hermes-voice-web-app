@@ -257,6 +257,33 @@ describe('ElevenLabsClient', () => {
     expect(calls.createAgent).toBe(2);
   });
 
+  it('carries the upstream validation detail into the error', async () => {
+    // A bare "ElevenLabs returned 400" says nothing about which field was
+    // rejected, which is the only thing that makes a 400 actionable.
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          detail: [
+            { loc: ['body', 'conversation_config', 'tts'], msg: 'unexpected field' },
+          ],
+        }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await expect(
+      client(fetchImpl as unknown as typeof fetch).listVoices(),
+    ).rejects.toThrow(/body\.conversation_config\.tts: unexpected field/);
+  });
+
+  it('falls back to raw text when the error body is not JSON', async () => {
+    const fetchImpl = vi.fn(async () => new Response('upstream exploded', { status: 502 }));
+
+    await expect(
+      client(fetchImpl as unknown as typeof fetch).listVoices(),
+    ).rejects.toThrow(/upstream exploded/);
+  });
+
   it('creates the agent with voice and prompt overrides enabled', async () => {
     const { impl, calls } = convaiFetch();
     await client(impl).ensureAgent('9GJrVnm8x3V1ySKEZC8v', 'Be brief.');
