@@ -33,9 +33,13 @@ desktop environment, no native app, no always-on wake word.
 
 ## 3. Architecture
 
-The central decision: **the browser talks audio directly to xAI, and talks tools
-through our server.** Audio takes the short path (low latency); anything requiring
-trust takes the server path.
+The central decision: **the browser talks audio directly to the voice
+provider (xAI or ElevenLabs), and talks tools through our server.** Audio
+takes the short path (low latency); anything requiring trust takes the
+server path. ElevenLabs is optional: set `ELEVENLABS_API_KEY` plus a
+custom `ELEVENLABS_VOICE_ID`. When both providers are configured the PWA
+exposes a picker. Voice ids (generated, cloned, designed) are applied as
+a per-session TTS override so one agent can speak as Billy, Blacco, etc.
 
 ```
   ┌───────────────┐   1. login (cookie)      ┌──────────────────────┐

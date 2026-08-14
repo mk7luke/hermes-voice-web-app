@@ -1,21 +1,37 @@
 /**
  * Voice session lifecycle.
  *
- * `POST /api/session/start` is where the two halves of the architecture are
- * stitched together: a Hermes session is created (or reused) and bound to this
- * browser's cookie, and an xAI ephemeral token is minted for the audio leg.
+ * `POST /api/session/start` stitches the two halves together: a Hermes session
+ * bound to this cookie, plus an ephemeral credential for the chosen voice
+ * provider (xAI token or ElevenLabs signed URL). Long-lived keys stay here.
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 
+import type { VoiceProvider } from '../config.js';
+import { VOICE_ID_RE } from '../config.js';
 import type { AppContext } from '../context.js';
 import { requireSession } from '../context.js';
-import { AUDIO_SAMPLE_RATE, buildVoiceSession, type TurnMode } from '../voice-session.js';
+import { ELEVENLABS_SAMPLE_RATE, ElevenLabsError } from '../elevenlabs-client.js';
+import {
+  AUDIO_SAMPLE_RATE,
+  buildElevenLabsInitiation,
+  buildVoiceSession,
+  type TurnMode,
+} from '../voice-session.js';
 
 const XAI_REALTIME_URL = 'wss://api.x.ai/v1/realtime';
 
+function resolveProvider(
+  requested: string | undefined,
+  fallback: VoiceProvider,
+): VoiceProvider {
+  if (requested === 'xai' || requested === 'elevenlabs') return requested;
+  return fallback;
+}
+
 export function registerSessionRoutes(app: FastifyInstance, context: AppContext): void {
-  const { config, logger, hermes, xai } = context;
+  const { config, logger, hermes, xai, elevenlabs } = context;
 
   app.post(
     '/api/session/start',
@@ -26,6 +42,8 @@ export function registerSessionRoutes(app: FastifyInstance, context: AppContext)
           type: 'object',
           properties: {
             turnMode: { type: 'string', enum: ['push_to_talk', 'hands_free'] },
+            provider: { type: 'string', enum: ['xai', 'elevenlabs'] },
+            voiceId: { type: 'string', minLength: 1, maxLength: 64 },
           },
         },
       },
@@ -34,12 +52,27 @@ export function registerSessionRoutes(app: FastifyInstance, context: AppContext)
       const session = requireSession(context, request, reply);
       if (!session) return reply;
 
-      const body = (request.body ?? {}) as { turnMode?: TurnMode };
+      const body = (request.body ?? {}) as {
+        turnMode?: TurnMode;
+        provider?: VoiceProvider;
+        voiceId?: string;
+      };
       const turnMode: TurnMode = body.turnMode === 'hands_free' ? 'hands_free' : 'push_to_talk';
+      const provider = resolveProvider(body.provider, config.defaultVoiceProvider);
 
-      // Reuse the Hermes session across reconnects so conversation context and
-      // memory survive a dropped socket. A fresh one is only created when this
-      // browser session has never had one.
+      if (provider === 'xai' && !config.xaiEnabled) {
+        return reply.code(400).send({
+          error: 'provider_unavailable',
+          message: 'xAI voice is not configured on this server.',
+        });
+      }
+      if (provider === 'elevenlabs' && !config.elevenlabsEnabled) {
+        return reply.code(400).send({
+          error: 'provider_unavailable',
+          message: 'ElevenLabs voice is not configured on this server.',
+        });
+      }
+
       if (!session.hermesSessionId) {
         try {
           session.hermesSessionId = await hermes.createSession(
@@ -54,34 +87,10 @@ export function registerSessionRoutes(app: FastifyInstance, context: AppContext)
         }
       }
 
-      const voiceSession = buildVoiceSession(config, { turnMode });
-
-      let token;
-      try {
-        token = await xai.createEphemeralToken(config.xaiTokenTtlSeconds, {
-          model: config.xaiVoiceModel,
-          ...voiceSession,
-        });
-      } catch (error) {
-        logger.error('could not mint an xAI ephemeral token', { error });
-        return reply.code(503).send({
-          error: 'xai_unavailable',
-          message: 'Could not obtain a voice token from xAI.',
-        });
+      if (provider === 'elevenlabs') {
+        return startElevenLabs(reply, session, turnMode, body.voiceId);
       }
-
-      // The response deliberately contains no long-lived secret: only the
-      // ephemeral token, which expires on its own.
-      return reply.send({
-        token: token.value,
-        expiresAt: token.expiresAt,
-        realtimeUrl: XAI_REALTIME_URL,
-        model: config.xaiVoiceModel,
-        sampleRate: AUDIO_SAMPLE_RATE,
-        turnMode,
-        session: voiceSession,
-        conversationId: session.conversationId,
-      });
+      return startXai(reply, session, turnMode);
     },
   );
 
@@ -132,4 +141,135 @@ export function registerSessionRoutes(app: FastifyInstance, context: AppContext)
     session.conversationId = null;
     return reply.send({ ok: true });
   });
+
+  async function startXai(
+    reply: FastifyReply,
+    session: NonNullable<ReturnType<typeof requireSession>>,
+    turnMode: TurnMode,
+  ) {
+    if (!xai) {
+      return reply.code(503).send({
+        error: 'xai_unavailable',
+        message: 'xAI voice is not configured.',
+      });
+    }
+
+    const voiceSession = buildVoiceSession(config, { turnMode });
+
+    let token;
+    try {
+      token = await xai.createEphemeralToken(config.xaiTokenTtlSeconds, {
+        model: config.xaiVoiceModel,
+        ...voiceSession,
+      });
+    } catch (error) {
+      logger.error('could not mint an xAI ephemeral token', { error });
+      return reply.code(503).send({
+        error: 'xai_unavailable',
+        message: 'Could not obtain a voice token from xAI.',
+      });
+    }
+
+    return reply.send({
+      provider: 'xai',
+      token: token.value,
+      expiresAt: token.expiresAt,
+      realtimeUrl: XAI_REALTIME_URL,
+      model: config.xaiVoiceModel,
+      sampleRate: AUDIO_SAMPLE_RATE,
+      turnMode,
+      session: voiceSession,
+      conversationId: session.conversationId,
+      voiceId: config.xaiVoice,
+      voiceName: config.xaiVoice,
+    });
+  }
+
+  async function startElevenLabs(
+    reply: FastifyReply,
+    _session: NonNullable<ReturnType<typeof requireSession>>,
+    turnMode: TurnMode,
+    requestedVoiceId: string | undefined,
+  ) {
+    if (!elevenlabs || !config.elevenlabsVoiceId) {
+      return reply.code(503).send({
+        error: 'elevenlabs_unavailable',
+        message: 'ElevenLabs voice is not configured.',
+      });
+    }
+
+    const voiceId = resolveElevenLabsVoiceId(requestedVoiceId);
+    if (!voiceId) {
+      return reply.code(400).send({
+        error: 'invalid_voice_id',
+        message: 'That voice id is not allowed on this server.',
+      });
+    }
+
+    let agentId: string;
+    try {
+      // The generated agent is cached for the process, so it is created from the
+      // stable configured voice; `voiceId` is applied per session via the
+      // initiation override instead.
+      agentId = await elevenlabs.ensureAgent(
+        config.elevenlabsVoiceId,
+        config.voiceInstructions,
+      );
+    } catch (error) {
+      logger.error('could not ensure an ElevenLabs agent', { error });
+      // The upstream status is the difference between "wrong key" (401),
+      // "plan does not include Agents" (403) and "we sent something ElevenLabs
+      // rejected" (422). Without it the banner sends people to check a key that
+      // was never the problem. The status alone is safe to show — no body, no URL.
+      const upstream = error instanceof ElevenLabsError ? error : null;
+      const status = upstream ? ` (ElevenLabs ${upstream.status})` : '';
+      const detail = upstream?.detail ? ` ${upstream.detail}` : '';
+      return reply.code(503).send({
+        error: 'elevenlabs_unavailable',
+        message: `Could not prepare the ElevenLabs agent${status}.${detail} Check the API key, or set ELEVENLABS_AGENT_ID to use an agent you created yourself.`,
+      });
+    }
+
+    let signed;
+    try {
+      signed = await elevenlabs.createSignedUrl(agentId);
+    } catch (error) {
+      logger.error('could not mint an ElevenLabs signed URL', { error });
+      return reply.code(503).send({
+        error: 'elevenlabs_unavailable',
+        message: 'Could not obtain a voice session from ElevenLabs.',
+      });
+    }
+
+    const initiation = buildElevenLabsInitiation(config, voiceId);
+    const voiceName =
+      config.elevenlabsVoices.find((voice) => voice.id === voiceId)?.name ?? voiceId;
+
+    return reply.send({
+      provider: 'elevenlabs',
+      signedUrl: signed.signedUrl,
+      sampleRate: ELEVENLABS_SAMPLE_RATE,
+      turnMode,
+      voiceId,
+      voiceName,
+      initiation,
+      conversationId: null,
+    });
+  }
+
+  function resolveElevenLabsVoiceId(requested: string | undefined): string | null {
+    const fallback = config.elevenlabsVoiceId;
+    if (!fallback) return null;
+    // ELEVENLABS_VOICE_ID is always permitted: the operator set it explicitly and
+    // it is the voice used when the client asks for nothing. A curated
+    // ELEVENLABS_VOICES list narrows the *extra* ids on offer, it does not
+    // revoke the default.
+    if (!requested || requested === fallback) return fallback;
+    if (!VOICE_ID_RE.test(requested)) return null;
+    if (config.elevenlabsVoices.some((voice) => voice.id === requested)) return requested;
+    // No curated list: any well-formed id is accepted (the account still
+    // has to own it; ElevenLabs will reject strangers).
+    if (config.elevenlabsVoices.length === 0) return requested;
+    return null;
+  }
 }

@@ -1,0 +1,428 @@
+# DiffSentry configuration for hermes-voice-web-app.
+#
+# This app sits between the public internet and someone's personal AI agent,
+# which holds their memory, files and credentials. The rules below are written
+# around that: the parts that hold secrets, authenticate a browser, or decide
+# what reaches Hermes get the closest read.
+#
+# Every rule here points at code that exists today. If a path or pattern stops
+# being real, delete the rule rather than letting it rot.
+
+reviews:
+  # 24 source files, 3 contributors, no monorepo. Assertive would generate more
+  # noise than a codebase this size can absorb.
+  profile: chill
+
+  request_changes_workflow: true
+  high_level_summary: true
+  commit_status: true
+
+  # `critical` and `major` findings should gate the merge here for the same
+  # reason CONTRIBUTING.md asks contributors not to edit tests/auth.test.ts:
+  # the failure mode is someone's agent being reachable without a cookie.
+  thread_gate: blocking
+
+  walkthrough:
+    enabled: true
+    collapse: true
+    changed_files_summary: true
+    # The interesting changes are multi-hop: browser -> our server -> Hermes,
+    # plus a second audio leg straight to xAI or ElevenLabs. A diagram carries
+    # that better than prose.
+    sequence_diagrams: true
+    estimate_effort: true
+    suggested_labels: true
+    # Single maintainer; a suggested reviewer is always the same person.
+    suggested_reviewers: false
+    poem: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - '^main$'
+    auto_incremental_review: true
+    # Dependabot opens grouped weekly PRs (.github/dependabot.yml). The `audit`
+    # job in .github/workflows/ci.yml is the real gate on those, not a prose
+    # review of a lockfile bump.
+    ignore_usernames:
+      - 'dependabot[bot]'
+    ignore_title_keywords:
+      - 'wip'
+
+  # Everything listed here is generated, vendored, or binary. `dist/` and
+  # `coverage/` are gitignored but can still arrive in a stray commit.
+  path_filters:
+    - '!dist/**'
+    - '!node_modules/**'
+    - '!coverage/**'
+    - '!package-lock.json'
+    - '!client/public/icons/**'
+    - '!**/*.min.*'
+    - '!**/*.map'
+
+  path_instructions:
+    # Every route except /health must resolve a session through
+    # requireSession(); routes/hermes.ts is the one that actually reaches the
+    # agent. Bodies are validated by Fastify JSON schemas and per-route
+    # rateLimit config — a new route without both is the gap to look for.
+    - path: 'server/src/routes/**'
+      instructions: |
+        Check that every new or changed handler calls `requireSession(context, request, reply)`
+        and returns early when it yields null. `/health` in server/src/app.ts is the only
+        intentional unauthenticated endpoint.
+
+        Confirm each route declares a Fastify `schema` for its body or query, and a
+        per-route `config.rateLimit` where the cost is asymmetric (login is 5/15min,
+        session start 20/min, hermes 60/min).
+
+        The Hermes session id must come from server-side session state, never from the
+        request body or a query parameter — a client naming its own Hermes session can
+        reach another gateway platform's conversations.
+
+        Error responses must not echo upstream provider bodies, headers, or URLs
+        containing tokens; the existing handlers return a fixed `error`/`message` pair.
+
+    # auth.ts encodes the app's safety properties: opaque signed cookie,
+    # server-side session state, constant-time passphrase comparison.
+    - path: 'server/src/auth.ts'
+      instructions: |
+        Treat changes here as security-critical. Verify passphrase comparison stays
+        constant-time (`scrypt` both sides, then `timingSafeEqual`) and that cookie
+        signature verification keeps using `timingSafeEqual` on equal-length buffers
+        rather than `===`.
+
+        Session ids must stay `randomBytes(32)`-derived and opaque. Nothing sensitive
+        may move from the server-side `AppSession` into the cookie.
+
+        Check TTL and expiry handling on any change to `SessionStore`: an expired
+        session must be rejected, not refreshed.
+
+    # config.ts is the single place that reads process.env, validates it, and
+    # fails startup loudly. It also decides which voice providers exist.
+    - path: 'server/src/config.ts'
+      instructions: |
+        This is the only module that should read `process.env`. Check that every new
+        setting is validated (type, range, allowed values) and that failures throw
+        `ConfigError` with a message naming the variable.
+
+        Secrets must have no defaults. Non-secret settings should keep sensible ones.
+
+        Any change to provider gating (`xaiEnabled`, `elevenlabsEnabled`,
+        `defaultVoiceProvider`) needs matching coverage in tests/config.test.ts or
+        tests/elevenlabs.test.ts — a half-configured provider must fail at startup,
+        not at first use.
+
+    # The three outbound clients hold the long-lived keys. Their shared shape —
+    # private #fetch, AbortController timeout, redacted error logging — is the
+    # thing to preserve.
+    - path: 'server/src/*-client.ts'
+      instructions: |
+        Every outbound request must go through the injected `#fetch` with an
+        `AbortController` timeout, and must clear its timer in a `finally`.
+
+        API keys belong in request headers only. Confirm no key reaches a response
+        body, a log line, a URL query string, or an error message; the clients log
+        `status` and a host, never the URL or the body.
+
+        Upstream failures should surface as a typed error with a status, so routes can
+        map them to a 502/503 rather than leaking the provider's own response.
+
+    # The browser is deliberately trusted with nothing but short-lived
+    # credentials. It also owns a fragile socket lifecycle: #discardSocket()
+    # detaches handlers *before* close so a superseded socket cannot re-enter
+    # the reconnect loop (see the comment in client/src/realtime.ts).
+    - path: 'client/src/**'
+      instructions: |
+        The page must never hold a long-lived secret. Only the xAI ephemeral token and
+        the ElevenLabs signed URL are acceptable, and neither may be written to
+        `localStorage`, a cookie, or the URL.
+
+        For socket changes, check that handlers are detached before `close()` and that a
+        superseded socket cannot fire `onClose` into the shared handlers — that is what
+        stops a reconnect stacking a second socket on the live one.
+
+        Transcript and banner text comes from a model. It must be rendered with
+        `textContent`, never `innerHTML` or `insertAdjacentHTML`.
+
+        Audio sample rate is provider-specific (24 kHz xAI, 16 kHz ElevenLabs); a change
+        to one must not assume the other's rate.
+
+    # The service worker's whole design is "shell only". Caching an /api/*
+    # response caches a credential or a stale auth state.
+    - path: 'client/public/sw.js'
+      instructions: |
+        Requests to `/api/*` must never be cached or served from cache — those responses
+        carry session state and ephemeral tokens.
+
+        Any change to the cache name needs the activate handler to still delete the old
+        one, or clients will be pinned to a stale shell.
+
+    # tests/auth.test.ts and tests/routes.test.ts encode the safety properties.
+    # CONTRIBUTING.md asks that they pass unmodified.
+    - path: 'tests/**'
+      instructions: |
+        Flag any weakened assertion in tests/auth.test.ts or tests/routes.test.ts — those
+        encode that no route reaches Hermes without a valid cookie and that a client
+        cannot choose its Hermes session. A change that breaks them is usually the bug,
+        not the test.
+
+        Bug fixes should add a test that fails before the fix. Prefer asserting behaviour
+        through `app.inject` over reaching into private state.
+
+    # Deployment surface. .env is injected at run time and must stay out of the
+    # image; host networking is a deliberate choice documented in the compose file.
+    - path: 'Dockerfile'
+      instructions: |
+        No secrets, `.env` files, or configuration values may be baked into the image or
+        passed as build args. Check `.dockerignore` still excludes `.env`.
+
+        Keep the runtime stage free of build-only dependencies and avoid running as root
+        where the base image allows otherwise.
+
+    - path: 'docker-compose.yml'
+      instructions: |
+        `network_mode: host` is deliberate: Hermes' api_server binds to 127.0.0.1:8642
+        and a bridge network cannot reach a loopback-bound service. Flag any change that
+        replaces it with a bridge plus port mapping, or that suggests rebinding Hermes to
+        0.0.0.0, unless the reasoning is spelled out.
+
+        Secrets must arrive via `env_file`, never inline `environment:` literals.
+
+    - path: '.github/workflows/**'
+      instructions: |
+        Actions should stay pinned to a major version at minimum. Workflows must not echo
+        secrets, and `pull_request_target` should not be introduced without a clear reason
+        — this repo takes external PRs.
+
+        `npm audit --audit-level=high` failing the build is intentional; flag attempts to
+        downgrade or `--force` past it rather than fixing the dependency.
+
+    # .env.example is the only documentation most operators read before running
+    # this against a live agent.
+    - path: '.env.example'
+      instructions: |
+        Every variable must be documented with what it does and whether it is required.
+        Values must stay empty or obviously fake — no real keys, hostnames, or tailnet
+        names. A new setting here needs a matching validation in server/src/config.ts.
+
+  builtin_patterns: true
+
+  anti_patterns:
+    # server/src/config.ts is the single env reader; routes take everything from
+    # `context.config`. Reading env inside a route bypasses all validation.
+    - name: env-read-outside-config
+      pattern: 'process\.env\.[A-Za-z_]'
+      path: 'server/src/routes/**'
+      severity: major
+      type: issue
+      message: 'Route reads process.env directly.'
+      advice: >-
+        Add the setting to the `Config` interface in server/src/config.ts, validate it in
+        `loadConfig`, and read it from `context.config`. That keeps startup the only place
+        a bad value can be caught.
+
+    # All three clients wrap fetch in a private #fetch with an AbortController.
+    # A bare global fetch has no timeout and cannot be stubbed in tests.
+    - name: untimed-global-fetch
+      pattern: '(?<!this\.#)\bfetch\s*\('
+      path: 'server/src/**'
+      severity: major
+      type: issue
+      message: 'Direct global fetch() on the server.'
+      advice: >-
+        Call the injected `this.#fetch` and pass an `AbortController` signal, as
+        hermes-client.ts, xai-client.ts and elevenlabs-client.ts do. A request without a
+        timeout can hang a route until the client gives up, and a hardcoded global fetch
+        cannot be stubbed in tests.
+
+    # server/src/logger.ts exists precisely so credentials get redacted. console
+    # bypasses redaction and the level threshold.
+    - name: console-bypasses-redacting-logger
+      pattern: '(?<![\\"''`\w.])console\.(log|info|warn|error|debug)\s*\('
+      path: 'server/src/**'
+      severity: minor
+      type: issue
+      message: 'console.* bypasses the redacting logger.'
+      advice: >-
+        Use the injected `logger`. Every line it emits passes through `redact()`, which is
+        what stops an ephemeral token or bearer key reaching a log file that later gets
+        pasted into an issue.
+
+    # Transcript content is model output. ui.ts renders it with textContent today.
+    - name: html-injection-sink
+      pattern: '\.(innerHTML|outerHTML)\s*=|insertAdjacentHTML\s*\('
+      path: 'client/src/**'
+      severity: critical
+      type: security
+      message: 'HTML sink used for content that includes model output.'
+      advice: >-
+        Render with `textContent` and build nodes with `document.createElement`, the way
+        `Ui.setVoiceOptions` and the transcript rendering already do. Transcripts and
+        banners carry text produced by a language model and by Hermes tool results.
+
+    # The browser is trusted with short-lived credentials only; localStorage
+    # currently holds nothing but the turn mode and the voice choice.
+    - name: credential-in-local-storage
+      pattern: '(localStorage|sessionStorage)\.setItem\(\s*[^)]*(token|secret|apiKey|api_key|password|signedUrl)'
+      flags: 'i'
+      path: 'client/src/**'
+      severity: critical
+      type: security
+      message: 'Credential written to web storage.'
+      advice: >-
+        Ephemeral tokens and signed URLs must live only for the lifetime of the socket.
+        Persisting one leaves a usable credential in a store that survives the tab and is
+        readable by any script on the origin.
+
+    # No key should ever appear in source. The audit and secret-scanning story
+    # here is "it never gets committed in the first place".
+    - name: hardcoded-provider-key
+      pattern: '(xai-[A-Za-z0-9_-]{16,}|sk_[A-Za-z0-9]{24,}|xi-api-key["\s:]+[A-Za-z0-9_-]{16,})'
+      severity: critical
+      type: security
+      message: 'Looks like a real provider API key committed to source.'
+      advice: >-
+        Move it to the environment and document it in .env.example with an empty value. If
+        this key ever reached a commit, rotate it — the history keeps it even after the
+        line is deleted.
+
+    # cookieOptions in routes/auth.ts takes `secure` from config.cookieSecure so
+    # local HTTP development works without weakening production.
+    - name: insecure-cookie-flag
+      pattern: '(secure|httpOnly)\s*:\s*false'
+      path: 'server/src/**'
+      severity: major
+      type: security
+      message: 'Cookie security flag hardcoded to false.'
+      advice: >-
+        Take `secure` from `config.cookieSecure` (COOKIE_SECURE exists for local HTTP
+        development) and keep `httpOnly` true. The session cookie is the only thing
+        standing between a browser and the agent.
+
+    # sw.js documents this rule in its own header comment: API responses carry
+    # session state and ephemeral tokens.
+    - name: service-worker-caches-api
+      pattern: 'cache\.(put|add|addAll)\('
+      path: 'client/public/sw.js'
+      severity: minor
+      type: suggestion
+      message: 'Caching call in the service worker — confirm it cannot reach /api/*.'
+      advice: >-
+        Confirm this cannot reach `/api/*`. A cached token is a stale credential, and a
+        cached `/api/auth/me` shows a signed-out user as signed in. The shell list at the
+        top of the file is the intended scope.
+
+    # The house style is a commented catch — see hermes-client.ts:130 and
+    # realtime.ts:78. A truly empty one hides a failure with no reason given.
+    - name: silently-empty-catch
+      pattern: 'catch\s*(\([^)]*\))?\s*\{\s*\}'
+      severity: minor
+      type: issue
+      message: 'Empty catch block with no explanation.'
+      advice: >-
+        Either handle the error, log it through the redacting logger, or keep the codebase
+        convention of a short comment saying why swallowing it is correct
+        (`/* already closing */`, `/* continuity is best-effort */`).
+
+    # Both tsconfigs are `strict` with noUncheckedIndexedAccess. Escaping the
+    # type system in this codebase usually means a protocol shape was guessed.
+    - name: type-system-escape-hatch
+      pattern: '@ts-(ignore|expect-error)\b|\bas\s+any\b|:\s*any(\[\])?\s*[=,;)]'
+      path: 'server/src/**'
+      severity: minor
+      type: suggestion
+      message: 'Type system escape hatch in server code.'
+      advice: >-
+        Both tsconfigs are strict and the server source currently has none of these. Model
+        the upstream shape explicitly — the clients narrow untyped JSON field by field
+        (`typeof voice.voice_id === 'string'`) rather than asserting it.
+
+    # A WebSocket URL is not a header: query strings land in logs and proxies.
+    # realtime.ts passes the xAI token as a subprotocol for exactly this reason.
+    - name: credential-in-query-string
+      pattern: 'searchParams\.set\(\s*[''"](token|api_key|apikey|secret|key|password)[''"]'
+      flags: 'i'
+      severity: major
+      type: security
+      message: 'Credential placed in a URL query string.'
+      advice: >-
+        Query strings end up in access logs, proxy logs and Referer headers. Use a header
+        where the transport allows one, or the subprotocol trick client/src/realtime.ts
+        uses for the xAI ephemeral token.
+
+  # No shared licence or copyright header exists on source files — each starts
+  # with a module doc comment instead — so no header is enforced.
+
+  pre_merge_checks:
+    # Conventional Commits, lowercase subject, no trailing period. Every commit
+    # since the initial one follows this: feat/fix/chore/docs/ci.
+    title:
+      mode: warning
+      requirements: |
+        Use Conventional Commits: `type: subject`, where type is one of
+        feat, fix, chore, docs, ci, refactor, test, perf, build.
+
+        The subject should be lowercase, imperative, and under about 72 characters, with
+        no trailing period. Say what changed, not which files were touched.
+
+    # Mirrors .github/PULL_REQUEST_TEMPLATE.md.
+    description:
+      mode: warning
+      requirements: |
+        Explain why the change was needed, not just what changed — the diff already shows
+        what. State how it was verified, with the actual commands and results
+        (`npm test`, `npm run typecheck`), and say explicitly if it was not exercised
+        against a real Hermes instance.
+
+        No .env values, tokens, or tailnet hostnames in the description or in pasted
+        output.
+
+    custom_checks:
+      # The PR template makes this a checkbox; these two files encode the app's
+      # safety properties and changing them silently is the risk.
+      - name: safety-test-changes-explained
+        mode: warning
+        instructions: |
+          If the diff modifies or deletes assertions in tests/auth.test.ts or
+          tests/routes.test.ts, the description must explain why. Those tests encode that
+          no route reaches Hermes without a valid cookie and that a client cannot choose
+          its Hermes session.
+
+          Adding new tests to those files is fine and needs no explanation.
+
+      # config.ts and .env.example drift apart easily, and .env.example is what
+      # an operator reads before pointing this at a live agent.
+      - name: config-and-env-example-in-step
+        mode: warning
+        instructions: |
+          If server/src/config.ts gains or renames a setting read from the environment,
+          .env.example must document it in the same PR, and README.md's variable table
+          should cover it if the setting is required.
+
+          Removing a setting should remove it from both.
+
+  # Ephemeral tokens, signed URLs, and the Hermes bridge all live in
+  # server/src/routes/ and server/src/auth.ts; the same mistake is worse there
+  # than in a worklet or an icon script.
+  severity_calibration:
+    enabled: true
+    high_fan_in_threshold: 5
+    escalate_high_fan_in: 1
+    escalate_risk_path: 1
+    deescalate_well_tested: 1
+    lower_confidence_well_tested: true
+    max_escalation: 2
+
+chat:
+  auto_reply: true
+
+issues:
+  auto_summary:
+    enabled: true
+    on_edit: false
+  chat:
+    auto_reply: true
+
+release_notes:
+  auto: true

@@ -53,11 +53,30 @@ export function me(): Promise<{ authenticated: boolean; expiresAt: number }> {
 
 export function startSession(
   turnMode: 'push_to_talk' | 'hands_free',
+  choice?: { provider: 'xai' | 'elevenlabs'; voiceId: string },
 ): Promise<RealtimeCredentials> {
   return request('/api/session/start', {
     method: 'POST',
-    body: JSON.stringify({ turnMode }),
+    body: JSON.stringify({
+      turnMode,
+      provider: choice?.provider,
+      voiceId: choice?.voiceId,
+    }),
   });
+}
+
+export interface VoiceOptions {
+  defaultProvider: 'xai' | 'elevenlabs';
+  defaultVoiceId: string | null;
+  providers: Array<{
+    id: 'xai' | 'elevenlabs';
+    label: string;
+    voices: Array<{ id: string; name: string }>;
+  }>;
+}
+
+export function voiceOptions(): Promise<VoiceOptions> {
+  return request('/api/voice/options');
 }
 
 export function endSession(): Promise<{ ok: boolean }> {

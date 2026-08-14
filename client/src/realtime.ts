@@ -7,14 +7,19 @@
  */
 
 export interface RealtimeCredentials {
-  token: string;
-  expiresAt: number;
-  realtimeUrl: string;
-  model: string;
+  provider?: 'xai' | 'elevenlabs';
+  token?: string;
+  expiresAt?: number;
+  realtimeUrl?: string;
+  model?: string;
   sampleRate: number;
   turnMode: 'push_to_talk' | 'hands_free';
-  session: Record<string, unknown>;
+  session?: Record<string, unknown>;
   conversationId: string | null;
+  signedUrl?: string;
+  voiceId?: string;
+  voiceName?: string;
+  initiation?: Record<string, unknown>;
 }
 
 export interface RealtimeHandlers {
@@ -83,8 +88,8 @@ export class RealtimeClient {
 
     this.#intentionalClose = false;
 
-    const url = new URL(credentials.realtimeUrl);
-    url.searchParams.set('model', credentials.model);
+    const url = new URL(credentials.realtimeUrl ?? 'wss://api.x.ai/v1/realtime');
+    url.searchParams.set('model', credentials.model ?? 'grok-voice-latest');
     // Resuming keeps the conversation intact across a dropped connection.
     if (credentials.conversationId) {
       url.searchParams.set('conversation_id', credentials.conversationId);
@@ -93,12 +98,12 @@ export class RealtimeClient {
     // Browsers cannot set WebSocket headers, so xAI takes the ephemeral token
     // as a subprotocol instead.
     const socket = new WebSocket(url.toString(), [
-      `xai-client-secret.${credentials.token}`,
+      `xai-client-secret.${credentials.token ?? ''}`,
     ]);
 
     socket.onopen = () => {
       // The session was built server-side; send it verbatim.
-      this.send({ type: 'session.update', session: credentials.session });
+      this.send({ type: 'session.update', session: credentials.session ?? {} });
       this.#handlers.onOpen?.();
     };
 

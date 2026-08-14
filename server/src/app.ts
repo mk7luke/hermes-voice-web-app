@@ -18,6 +18,7 @@ import type { AppContext } from './context.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerHermesRoutes } from './routes/hermes.js';
 import { registerSessionRoutes } from './routes/session.js';
+import { registerVoiceRoutes } from './routes/voice.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -79,6 +80,7 @@ export async function buildApp(context: AppContext): Promise<FastifyInstance> {
 
   registerAuthRoutes(app, context);
   registerSessionRoutes(app, context);
+  registerVoiceRoutes(app, context);
   registerHermesRoutes(app, context);
 
   // --- Static PWA -----------------------------------------------------------
